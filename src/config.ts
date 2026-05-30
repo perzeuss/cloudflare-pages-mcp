@@ -1,46 +1,156 @@
-import { z } from "zod";
-
 /**
- * Centralised, validated configuration loaded from environment variables.
+ * Central configuration, loaded entirely from environment variables so the
+ * server can be configured for any deployment (Docker, local, managed hosts)
+ * without code changes.
  *
- * All environment access happens here so the rest of the codebase can depend on
- * a strongly-typed, validated config object instead of reading `process.env`
- * directly.
+ * The Cloudflare credentials are validated fail-loud here; the HTTP server and
+ * OAuth settings are layered on so the same server can run as a remote Claude
+ * custom connector.
  */
 
-/** A required, non-empty string env var with a consistent error message. */
-const requiredEnv = (name: string) =>
-  z
-    .string({
-      required_error: `${name} is required`,
-      invalid_type_error: `${name} is required`,
-    })
-    .min(1, `${name} is required`);
+import { randomBytes } from "node:crypto";
 
-const ConfigSchema = z.object({
-  cloudflareApiToken: requiredEnv("CLOUDFLARE_API_TOKEN"),
-  cloudflareAccountId: requiredEnv("CLOUDFLARE_ACCOUNT_ID"),
-});
+import { parseList } from "./security.js";
 
-export type Config = z.infer<typeof ConfigSchema>;
+const DEFAULT_API_BASE_URL = "https://api.cloudflare.com/client/v4";
 
 /**
- * Parse and validate the configuration from an environment object (defaults to
- * `process.env`). Fails loudly, listing every missing/invalid variable.
+ * OAuth 2.1 authorization-server configuration. Enabled by setting
+ * OAUTH_PASSWORD; required for using the server as a Claude custom connector
+ * (Claude authenticates connectors via OAuth + dynamic client registration).
  */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const result = ConfigSchema.safeParse({
-    cloudflareApiToken: env.CLOUDFLARE_API_TOKEN,
-    cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID,
-  });
+export interface OAuthConfig {
+  /** Public HTTPS issuer/base URL of this server (also the resource id). */
+  issuerUrl: string;
+  /** Shared password the user enters on the consent screen. */
+  password: string;
+  /** HMAC secret used to sign stateless authorization codes and tokens. */
+  signingSecret: string;
+  /** Access-token lifetime in seconds. */
+  accessTokenTtl: number;
+  /** Refresh-token lifetime in seconds. */
+  refreshTokenTtl: number;
+}
 
-  if (!result.success) {
-    const issues = result.error.issues.map((i) => `  - ${i.message}`).join("\n");
+export interface Config {
+  // --- Cloudflare credentials (required) ---
+  /** Cloudflare API token with Pages edit permission. */
+  apiToken: string;
+  /** Cloudflare account ID that owns the Pages projects. */
+  accountId: string;
+  /** Base URL for the Cloudflare API (override for testing). */
+  apiBaseUrl: string;
+
+  // --- HTTP server ---
+  /** HTTP port the server listens on. */
+  port: number;
+  /** Host/interface to bind to. */
+  host: string;
+  /** Public base URL this server is reachable at (also the OAuth issuer). */
+  publicBaseUrl?: string;
+
+  // --- Security / hardening ---
+  /**
+   * Express "trust proxy" setting. A number of proxy hops to trust (default 1,
+   * suitable for a single reverse proxy) is recommended over `true`, which is
+   * permissive and lets clients spoof X-Forwarded-For to bypass rate limiting.
+   */
+  trustProxy: boolean | number;
+  /** Max accepted JSON request body size (Express byte-size string). */
+  maxBodySize: string;
+  /** Rate-limit window in milliseconds. */
+  rateLimitWindowMs: number;
+  /** Max requests per window per client IP (0 disables rate limiting). */
+  rateLimitMax: number;
+  /** Optional allow-list of request Origin headers for the MCP endpoint. */
+  allowedOrigins?: string[];
+  /** Optional bearer token. If set, every MCP request must send it. */
+  authToken?: string;
+  /** OAuth authorization server, enabled when OAUTH_PASSWORD is set. */
+  oauth?: OAuthConfig;
+}
+
+/**
+ * Build the OAuth config when OAUTH_PASSWORD is set. Requires a public HTTPS
+ * issuer URL (OAUTH_ISSUER_URL or PUBLIC_BASE_URL). Fails loudly on
+ * misconfiguration instead of silently leaving the connector unauthenticated.
+ */
+export function readOAuthConfig(): OAuthConfig | undefined {
+  const password = process.env.OAUTH_PASSWORD?.trim();
+  if (!password) return undefined;
+
+  const issuerUrl = (process.env.OAUTH_ISSUER_URL || process.env.PUBLIC_BASE_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  if (!issuerUrl) {
     throw new Error(
-      `Invalid configuration:\n${issues}\n\n` +
-        "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in the MCP server environment.",
+      "OAuth is enabled (OAUTH_PASSWORD set) but no issuer URL is configured. " +
+        "Set OAUTH_ISSUER_URL (or PUBLIC_BASE_URL) to this server's public URL.",
     );
   }
 
-  return result.data;
+  let signingSecret = process.env.OAUTH_SIGNING_SECRET?.trim();
+  if (!signingSecret) {
+    signingSecret = randomBytes(32).toString("hex");
+    console.warn(
+      "[config] OAUTH_SIGNING_SECRET not set — generated an ephemeral one. " +
+        "Existing tokens are invalidated on restart and multiple instances " +
+        "won't share tokens. Set OAUTH_SIGNING_SECRET for production.",
+    );
+  }
+
+  return {
+    issuerUrl,
+    password,
+    signingSecret,
+    accessTokenTtl: Number.parseInt(process.env.OAUTH_ACCESS_TOKEN_TTL || "3600", 10),
+    refreshTokenTtl: Number.parseInt(process.env.OAUTH_REFRESH_TOKEN_TTL || "2592000", 10),
+  };
+}
+
+/**
+ * Parse the TRUST_PROXY env var. Accepts a number of hops, or `true`/`false`.
+ * Defaults to 1 (a single reverse proxy) — not `true`, which is permissive and
+ * lets clients spoof X-Forwarded-For to bypass IP-based rate limiting.
+ */
+export function readTrustProxy(): boolean | number {
+  const raw = process.env.TRUST_PROXY?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return 1;
+  if (["false", "off", "no", "0"].includes(raw)) return false;
+  if (["true", "on", "yes"].includes(raw)) return true;
+  const n = Number.parseInt(raw, 10);
+  return Number.isNaN(n) ? 1 : n;
+}
+
+export function loadConfig(): Config {
+  const apiToken = (process.env.CLOUDFLARE_API_TOKEN || "").trim();
+  const accountId = (process.env.CLOUDFLARE_ACCOUNT_ID || "").trim();
+
+  if (!apiToken) {
+    throw new Error("CLOUDFLARE_API_TOKEN is required. Set it as an environment variable.");
+  }
+  if (!accountId) {
+    throw new Error("CLOUDFLARE_ACCOUNT_ID is required. Set it as an environment variable.");
+  }
+
+  const publicBaseUrl = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+
+  return {
+    apiToken,
+    accountId,
+    apiBaseUrl: (process.env.CLOUDFLARE_API_BASE_URL || DEFAULT_API_BASE_URL).trim(),
+    port: Number.parseInt(process.env.PORT || "3000", 10),
+    host: (process.env.HOST || "0.0.0.0").trim(),
+    publicBaseUrl: publicBaseUrl || undefined,
+    trustProxy: readTrustProxy(),
+    maxBodySize: (process.env.MAX_BODY_SIZE || "25mb").trim(),
+    rateLimitWindowMs: Number.parseInt(process.env.RATE_LIMIT_WINDOW_MS || "60000", 10),
+    rateLimitMax: Number.parseInt(process.env.RATE_LIMIT_MAX || "60", 10),
+    allowedOrigins: (() => {
+      const list = parseList(process.env.ALLOWED_ORIGINS);
+      return list.length > 0 ? list : undefined;
+    })(),
+    authToken: process.env.MCP_AUTH_TOKEN?.trim() || undefined,
+    oauth: readOAuthConfig(),
+  };
 }

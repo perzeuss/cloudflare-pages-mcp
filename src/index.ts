@@ -1,34 +1,58 @@
 #!/usr/bin/env node
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createServer } from "./server.js";
-import { logger } from "./logger.js";
+/**
+ * Remote MCP server for Cloudflare Pages.
+ *
+ * Exposes:
+ *   - POST /mcp     Streamable HTTP MCP endpoint (use this URL as the Claude
+ *                   custom connector URL).
+ *   - GET  /health  Health check.
+ *
+ * The Express app itself is built in app.ts (so it can be tested); this file
+ * just wires configuration, binds the port and handles graceful shutdown.
+ */
 
-async function main(): Promise<void> {
-  const server = createServer();
-  const transport = new StdioServerTransport();
+import { createApp } from "./app.js";
+import { loadConfig } from "./config.js";
 
-  // Graceful shutdown: close the server so in-flight work can settle, then
-  // exit. SIGINT/SIGTERM are the signals MCP clients send when stopping us.
-  let shuttingDown = false;
-  const shutdown = (signal: string): void => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    logger.info(`received ${signal}, shutting down`);
-    server
-      .close()
-      .catch((err) => logger.error("error during shutdown", err))
-      .finally(() => process.exit(0));
+function main() {
+  const config = loadConfig();
+  const { app, authMode } = createApp(config);
+
+  const server = app.listen(config.port, config.host, () => {
+    console.log(`cloudflare-pages-mcp listening on http://${config.host}:${config.port}`);
+    console.log(`  MCP endpoint:   POST /mcp`);
+    console.log(`  Health:         GET  /health`);
+    if (config.publicBaseUrl) {
+      console.log(`  Public base:    ${config.publicBaseUrl}`);
+    } else {
+      console.log(
+        "  Public base:    (set PUBLIC_BASE_URL to your public https URL for connectors)",
+      );
+    }
+    const authLabel = {
+      oauth: `OAuth 2.1 (issuer ${config.oauth?.issuerUrl})`,
+      token: "static bearer token",
+      open: "open (no auth)",
+    }[authMode];
+    console.log(`  Auth:           ${authLabel}`);
+    console.log(
+      `  Rate limit:     ${config.rateLimitMax > 0 ? `${config.rateLimitMax}/${config.rateLimitWindowMs}ms per IP` : "disabled"}`,
+    );
+  });
+
+  // Graceful shutdown so in-flight requests can finish on redeploys.
+  const shutdown = (signal: string) => {
+    console.log(`Received ${signal}, shutting down...`);
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 10_000).unref();
   };
-  process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
-
-  await server.connect(transport);
-  logger.info("started on stdio transport");
-  // Server runs until stdin closes; nothing else to do on the main thread.
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
-main().catch((err) => {
-  // stderr only — stdout is reserved for the JSON-RPC protocol stream.
-  logger.error("fatal error starting cloudflare-pages-mcp", err);
+try {
+  main();
+} catch (err) {
+  console.error("Fatal:", err instanceof Error ? err.message : err);
   process.exit(1);
-});
+}

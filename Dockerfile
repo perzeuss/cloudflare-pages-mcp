@@ -1,4 +1,6 @@
 # syntax=docker/dockerfile:1
+#
+# Cloudflare Pages MCP server — remote HTTP + OAuth 2.1 image.
 
 # --- Stage 1: install full dependencies (incl. dev) ------------------------
 FROM node:22-alpine AS deps
@@ -24,12 +26,12 @@ RUN npm ci --omit=dev
 FROM node:22-alpine AS runtime
 WORKDIR /app
 LABEL org.opencontainers.image.source="https://github.com/perzeuss/cloudflare-pages-mcp" \
-      org.opencontainers.image.description="MCP server that deploys static sites to Cloudflare Pages via the Direct Upload API." \
+      org.opencontainers.image.description="Remote MCP server (HTTP + OAuth 2.1) for Cloudflare Pages, usable as a Claude custom connector." \
       org.opencontainers.image.licenses="MIT"
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    PORT=3000
 
-# tini gives us proper PID 1 signal handling so SIGINT/SIGTERM reach Node for a
-# graceful shutdown.
+# tini gives us proper PID 1 signal handling (clean shutdowns).
 RUN apk add --no-cache tini
 
 # Run as the unprivileged "node" user that ships with the base image.
@@ -38,8 +40,10 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
 
 USER node
+EXPOSE 3000
 
-# This is a stdio MCP server: it speaks JSON-RPC over stdin/stdout and does not
-# listen on any port, so there is no EXPOSE/HEALTHCHECK.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]

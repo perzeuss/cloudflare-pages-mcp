@@ -1,122 +1,110 @@
 # cloudflare-pages-mcp
 
-An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
-(e.g. Claude) **create Cloudflare Pages projects and deploy files to a live
-`*.pages.dev` site**. Hand it Claude-generated HTML/CSS/JS and it publishes a
-real, public web page.
+Remote MCP server (Streamable HTTP + OAuth 2.1) to create Cloudflare Pages
+projects and deploy a directory of static files (for example, Claude-generated
+HTML) to a live `*.pages.dev` site using the Cloudflare Direct Upload API.
 
-It talks directly to the Cloudflare REST API using the same
-[Direct Upload](https://developers.cloudflare.com/pages/get-started/direct-upload/)
-flow that Wrangler uses (asset hashing → `check-missing` → asset upload →
-deployment), so there is no Wrangler dependency and no subprocess — just the
-API.
+It runs as an HTTP service so you can add it to Claude as a **custom
+connector** over HTTPS, with built-in OAuth 2.1 (PKCE, dynamic client
+registration) gated behind a single shared password.
 
 ## Tools
 
-| Tool             | What it does                                                       |
-| ---------------- | ------------------------------------------------------------------ |
-| `create_project` | Create an empty Direct Upload project (`<name>.pages.dev`).        |
-| `deploy`         | Upload files and publish a deployment. Auto-creates the project.   |
-| `list_projects`  | List all Pages projects in the account.                            |
-| `get_project`    | Show one project's live URL, custom domains and production branch. |
-| `delete_project` | Permanently delete a project and its deployments.                  |
+- `create_project` — create a new Pages project (`<name>.pages.dev`).
+- `deploy` — upload a directory and publish a deployment.
+- `list_projects` — list existing projects.
+- `get_project` — fetch one project's details.
+- `delete_project` — delete a project.
 
-### `deploy`
+## Endpoints
 
-Accepts files **inline** and/or from a local **directory** (walked
-recursively; inline files win on path conflicts):
+- `POST /mcp` — Streamable HTTP MCP endpoint (use this URL in Claude).
+- `GET /health` — health check, returns `{ "status": "ok", "auth": "<mode>" }`.
 
-```jsonc
-{
-  "project_name": "my-landing-page",
-  "files": [
-    { "path": "index.html", "content": "<!doctype html><h1>Hello</h1>" },
-    { "path": "assets/logo.png", "content": "<base64…>", "encoding": "base64" },
-  ],
-  // or: "directory": "/abs/path/to/site"
-  // "branch": "preview"   // omit for a production deploy
-}
+## Requirements
+
+- Node.js >= 22.
+- A Cloudflare API token with the **Cloudflare Pages: Edit** permission.
+- Your Cloudflare **Account ID**.
+
+## Configuration
+
+All configuration is via environment variables.
+
+| Variable                  | Required | Default           | Description                                                                   |
+| ------------------------- | -------- | ----------------- | ----------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`    | yes      | —                 | API token with Pages edit permission.                                         |
+| `CLOUDFLARE_ACCOUNT_ID`   | yes      | —                 | Account ID that owns the projects.                                            |
+| `CLOUDFLARE_API_BASE_URL` | no       | public API        | Override the API base URL (testing).                                          |
+| `PORT`                    | no       | `3000`            | HTTP port to listen on.                                                       |
+| `HOST`                    | no       | `0.0.0.0`         | Interface to bind to.                                                         |
+| `PUBLIC_BASE_URL`         | no       | —                 | Public URL the server is reachable at (also the default OAuth issuer).        |
+| `MCP_AUTH_TOKEN`          | no       | —                 | If set, every `POST /mcp` must send `Authorization: Bearer <token>`.          |
+| `OAUTH_PASSWORD`          | no       | —                 | Enables the OAuth 2.1 server; the password users enter on the consent screen. |
+| `OAUTH_ISSUER_URL`        | no       | `PUBLIC_BASE_URL` | Public https issuer URL for OAuth.                                            |
+| `OAUTH_SIGNING_SECRET`    | no       | random            | HMAC secret for signing tokens. `openssl rand -hex 32`.                       |
+| `OAUTH_ACCESS_TOKEN_TTL`  | no       | `3600`            | Access-token lifetime (seconds).                                              |
+| `OAUTH_REFRESH_TOKEN_TTL` | no       | `2592000`         | Refresh-token lifetime (seconds).                                             |
+| `TRUST_PROXY`             | no       | `1`               | Express `trust proxy` (proxy hops, or `true`/`false`).                        |
+| `MAX_BODY_SIZE`           | no       | `25mb`            | Max accepted JSON request body size.                                          |
+| `RATE_LIMIT_WINDOW_MS`    | no       | `60000`           | Rate-limit window in ms.                                                      |
+| `RATE_LIMIT_MAX`          | no       | `60`              | Max requests per window per IP (`0` disables).                                |
+| `ALLOWED_ORIGINS`         | no       | —                 | Comma-separated Origin allow-list for `/mcp`.                                 |
+
+Authentication modes are chosen automatically:
+
+- **OAuth 2.1** when `OAUTH_PASSWORD` is set (required for Claude connectors).
+- **Static token** when only `MCP_AUTH_TOKEN` is set.
+- **Open** when neither is set (use only behind your own network boundary).
+
+## Quickstart (Docker)
+
+```bash
+cp .env.example .env   # fill in CLOUDFLARE_* and (for Claude) OAUTH_*
+docker compose up -d --build
+
+curl -s http://localhost:3000/health
+# {"status":"ok","auth":"oauth", ...}
 ```
 
-Returns the deployment URL and the production `https://<name>.pages.dev` URL.
+Run it behind a reverse proxy that terminates TLS and set `PUBLIC_BASE_URL`
+(and therefore `OAUTH_ISSUER_URL`) to your public `https://` URL.
 
-Limits (enforced by Cloudflare): up to **20,000 files**, **25 MiB** per file.
-
-## Setup
-
-Requires Node.js ≥ 22 (see `.nvmrc`).
+## Quickstart (local)
 
 ```bash
 npm install
 npm run build
+CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... npm start
 ```
 
-### Credentials
+For development with auto-reload, use `npm run dev`.
 
-Set two environment variables (see `.env.example`):
+## Connect to Claude
 
-- `CLOUDFLARE_API_TOKEN` — a token with the **Cloudflare Pages: Edit**
-  permission ([create one here](https://dash.cloudflare.com/profile/api-tokens)).
-- `CLOUDFLARE_ACCOUNT_ID` — your account ID (Workers & Pages → Account details).
+1. Deploy this server behind HTTPS and set `OAUTH_PASSWORD`, `PUBLIC_BASE_URL`
+   (= your public `https://` URL) and a stable `OAUTH_SIGNING_SECRET`.
+2. In Claude, go to **Settings → Connectors → Add custom connector**.
+3. Enter the MCP URL: `https://<your-host>/mcp`.
+4. Claude performs OAuth discovery and dynamic client registration, then opens
+   the consent screen. Enter your `OAUTH_PASSWORD` to authorize.
+5. The five Cloudflare Pages tools become available in your conversations.
 
-## Use with Claude
-
-Add to your MCP client config (e.g. Claude Desktop
-`claude_desktop_config.json`, or `.mcp.json` for Claude Code):
-
-```jsonc
-{
-  "mcpServers": {
-    "cloudflare-pages": {
-      "command": "node",
-      "args": ["/abs/path/to/cloudflare-pages-mcp/dist/index.js"],
-      "env": {
-        "CLOUDFLARE_API_TOKEN": "…",
-        "CLOUDFLARE_ACCOUNT_ID": "…",
-      },
-    },
-  },
-}
-```
-
-Then ask Claude to design a page and deploy it — it will call `deploy` and give
-you back the live URL.
-
-## Docker
-
-The image is a stdio MCP server (no ports). Pass the credentials as environment
-variables and keep stdin/stdout attached for the JSON-RPC transport:
+You can confirm the server is healthy before connecting:
 
 ```bash
-docker build -t cloudflare-pages-mcp .
-docker run --rm -i \
-  -e CLOUDFLARE_API_TOKEN=… \
-  -e CLOUDFLARE_ACCOUNT_ID=… \
-  cloudflare-pages-mcp
+curl -s https://<your-host>/health
 ```
 
-A prebuilt image is published to `ghcr.io/perzeuss/cloudflare-pages-mcp`.
+## Security
 
-## Development
-
-```bash
-npm run dev          # run from source via tsx
-npm run typecheck
-npm run lint
-npm run format
-npm test             # node:test suite
-npm run test:coverage
-```
-
-This is a **stdio** server: stdout carries the JSON-RPC protocol, so all logging
-goes to **stderr** via `src/logger.ts`. Configuration is validated centrally in
-`src/config.ts`.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and the
-[Conventional Commits](https://www.conventionalcommits.org/) /
-[semantic-release](https://semantic-release.gitbook.io/) conventions this
-project follows.
+- Treat your Cloudflare API token as a secret; never commit it. Scope it to the
+  minimum (Pages edit only).
+- Always enable OAuth (or at least `MCP_AUTH_TOKEN`) when the server is exposed
+  publicly — it holds your Cloudflare credentials.
+- Set a stable `OAUTH_SIGNING_SECRET` in production so issued tokens survive
+  restarts and are shared across instances.
 
 ## License
 
-[MIT](LICENSE) © Pascal Malbranche
+MIT
