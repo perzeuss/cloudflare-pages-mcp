@@ -53,7 +53,7 @@ export class CloudflareClient {
   static fromEnv(): CloudflareClient {
     try {
       const config = loadConfig();
-      return new CloudflareClient(config.cloudflareAccountId, config.cloudflareApiToken);
+      return new CloudflareClient(config.accountId, config.apiToken);
     } catch (err) {
       throw new CloudflareError(err instanceof Error ? err.message : String(err));
     }

@@ -10,74 +10,48 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import type { Config } from "./config.js";
-import { CloudflareClient, CloudflareError, type DeploymentResult } from "./cloudflare.js";
+import { CloudflareClient } from "./cloudflare.js";
 import { collectFiles } from "./files.js";
-import { logger } from "./logger.js";
 
 export interface ServerContext {
   config: Config;
   client: CloudflareClient;
 }
 
-const createProjectSchema = {
-  name: z
-    .string()
-    .min(1)
-    .max(58)
-    .regex(/^[a-z0-9][a-z0-9-]*$/, "Project name must be lowercase alphanumeric with hyphens")
-    .describe("Project name; becomes <name>.pages.dev"),
-};
-
-const deploySchema = {
-  project: z.string().min(1).describe("Existing Cloudflare Pages project name to deploy to"),
-  directory: z.string().min(1).describe("Absolute path to the directory of static files to deploy"),
-  branch: z.string().optional().describe("Optional git-style branch label for the deployment"),
-};
-
-const listProjectsSchema = {
-  limit: z
-    .number()
-    .int()
-    .min(1)
-    .max(100)
+const inlineFileSchema = z.object({
+  path: z.string().describe('Site-relative path, e.g. "index.html" or "assets/app.css".'),
+  content: z.string().describe("File content."),
+  encoding: z
+    .enum(["utf8", "base64"])
     .optional()
-    .describe("Maximum number of projects to return"),
+    .describe(
+      'Encoding of `content`. Use "base64" for binary assets (images, fonts). Default: utf8.',
+    ),
+});
+
+type ToolResult = {
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
 };
 
-const getProjectSchema = {
-  project: z.string().min(1).describe("Project name to fetch details for"),
-};
-
-const deleteProjectSchema = {
-  project: z.string().min(1).describe("Project name to delete"),
-};
-
-function formatDeployment(result: DeploymentResult): string {
-  const lines = [`Deployed to ${result.url}`, `Project: ${result.project}`];
-  if (result.deploymentId) lines.push(`Deployment ID: ${result.deploymentId}`);
-  return lines.join("\n");
-}
-
-function toolError(err: unknown) {
-  const message =
-    err instanceof CloudflareError ? err.message : err instanceof Error ? err.message : String(err);
-  logger.error("Tool execution failed", { error: message });
-  return {
-    isError: true,
-    content: [{ type: "text" as const, text: `Error: ${message}` }],
-  };
-}
-
-/**
- * Run a tool handler and wrap any thrown error in an MCP error result so the
- * connector surfaces a readable message instead of a transport-level failure.
- */
-async function run(fn: () => Promise<{ content: Array<{ type: "text"; text: string }> }>) {
+/** Runs a handler and maps its string output / thrown errors into an MCP result. */
+async function run(fn: () => Promise<string>): Promise<ToolResult> {
   try {
-    return await fn();
+    return { content: [{ type: "text", text: await fn() }] };
   } catch (err) {
-    return toolError(err);
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      content: [{ type: "text", text: `Error: ${message}` }],
+      isError: true,
+    };
   }
+}
+
+function liveUrls(project: { name: string; subdomain?: string }, deploymentUrl?: string): string {
+  const lines: string[] = [];
+  if (deploymentUrl) lines.push(`Deployment URL: ${deploymentUrl}`);
+  lines.push(`Production URL: https://${project.subdomain || `${project.name}.pages.dev`}`);
+  return lines.join("\n");
 }
 
 export function buildMcpServer(ctx: ServerContext): McpServer {
@@ -91,88 +65,137 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
   server.registerTool(
     "create_project",
     {
-      title: "Create Cloudflare Pages project",
+      annotations: { title: "Create Cloudflare Pages project" },
       description:
-        "Create a new Cloudflare Pages project. The project name becomes the subdomain: <name>.pages.dev.",
-      inputSchema: createProjectSchema,
+        "Create an empty Direct Upload Cloudflare Pages project. The project name becomes the <name>.pages.dev subdomain (lowercase letters, digits and hyphens). Use `deploy` afterwards to publish files. `deploy` can also auto-create the project, so calling this first is optional.",
+      inputSchema: {
+        name: z.string().describe("Project name; also the *.pages.dev subdomain."),
+        production_branch: z
+          .string()
+          .optional()
+          .describe('Production branch name. Default: "main".'),
+      },
     },
     async (args) =>
       run(async () => {
-        const project = await client.createProject(args.name);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Created project "${project.name}" -> https://${project.subdomain}`,
-            },
-          ],
-        };
+        const project = await client.createProject(args.name, args.production_branch ?? "main");
+        return `Created project "${project.name}".\n${liveUrls(project)}`;
       }),
   );
 
   server.registerTool(
     "deploy",
     {
-      title: "Deploy files to Cloudflare Pages",
+      annotations: { title: "Deploy files to Cloudflare Pages" },
       description:
-        "Upload a directory of static files to a Cloudflare Pages project and publish a deployment.",
-      inputSchema: deploySchema,
+        "Upload files and create a deployment, publishing a live site. Provide files inline via `files` and/or point at a local `directory` (walked recursively); inline files win on path conflicts. Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs.",
+      inputSchema: {
+        project_name: z.string().describe("Target Pages project name."),
+        files: z
+          .array(inlineFileSchema)
+          .optional()
+          .describe("Files to deploy, defined inline (e.g. Claude-generated HTML/CSS/JS)."),
+        directory: z
+          .string()
+          .optional()
+          .describe("Absolute path to a local directory whose contents are deployed."),
+        branch: z
+          .string()
+          .optional()
+          .describe(
+            "Deployment branch. Omit (or use the production branch) for a production deploy; any other value creates a preview deployment.",
+          ),
+        create_if_missing: z
+          .boolean()
+          .optional()
+          .describe("Create the project if it does not exist yet. Default: true."),
+        production_branch: z
+          .string()
+          .optional()
+          .describe('Production branch used when auto-creating the project. Default: "main".'),
+      },
     },
     async (args) =>
       run(async () => {
-        const files = await collectFiles(args.directory);
-        const result = await client.deploy(args.project, files, args.branch);
-        return { content: [{ type: "text", text: formatDeployment(result) }] };
+        const files = await collectFiles({
+          files: args.files,
+          directory: args.directory,
+        });
+
+        if (args.create_if_missing !== false && !(await client.projectExists(args.project_name))) {
+          await client.createProject(args.project_name, args.production_branch ?? "main");
+        }
+
+        const { deployment, uploaded, total } = await client.deploy({
+          projectName: args.project_name,
+          files,
+          branch: args.branch,
+        });
+
+        return [
+          `Deployed ${files.length} file(s) to "${args.project_name}" (${uploaded}/${total} assets newly uploaded).`,
+          liveUrls({ name: args.project_name }, deployment.url),
+          `Deployment ID: ${deployment.id}`,
+        ].join("\n");
       }),
   );
 
   server.registerTool(
     "list_projects",
     {
-      title: "List Cloudflare Pages projects",
-      description: "List existing Cloudflare Pages projects in the account.",
-      inputSchema: listProjectsSchema,
+      annotations: { title: "List Cloudflare Pages projects" },
+      description: "List all Cloudflare Pages projects in the account.",
+      inputSchema: {},
     },
-    async (args) =>
+    async () =>
       run(async () => {
-        const projects = await client.listProjects(args.limit);
-        const text =
-          projects.length === 0
-            ? "No projects found."
-            : projects.map((p) => `- ${p.name} (https://${p.subdomain})`).join("\n");
-        return { content: [{ type: "text", text }] };
+        const projects = await client.listProjects();
+        if (projects.length === 0) return "No Pages projects found.";
+        return projects
+          .map((p) => `- ${p.name} → https://${p.subdomain || `${p.name}.pages.dev`}`)
+          .join("\n");
       }),
   );
 
   server.registerTool(
     "get_project",
     {
-      title: "Get Cloudflare Pages project",
-      description: "Fetch details for a single Cloudflare Pages project.",
-      inputSchema: getProjectSchema,
+      annotations: { title: "Get Cloudflare Pages project" },
+      description: "Get details for a single Cloudflare Pages project, including its live domains.",
+      inputSchema: {
+        name: z.string().describe("Project name."),
+      },
     },
     async (args) =>
       run(async () => {
-        const project = await client.getProject(args.project);
-        return {
-          content: [{ type: "text", text: JSON.stringify(project, null, 2) }],
-        };
+        const p = await client.getProject(args.name);
+        const domains = p.domains?.length ? p.domains.join(", ") : "(none)";
+        return [
+          `Project: ${p.name}`,
+          liveUrls(p),
+          `Custom domains: ${domains}`,
+          `Production branch: ${p.production_branch ?? "main"}`,
+        ].join("\n");
       }),
   );
 
   server.registerTool(
     "delete_project",
     {
-      title: "Delete Cloudflare Pages project",
-      description: "Delete a Cloudflare Pages project permanently.",
-      inputSchema: deleteProjectSchema,
+      annotations: {
+        title: "Delete Cloudflare Pages project",
+        destructiveHint: true,
+      },
+      description:
+        "Permanently delete a Cloudflare Pages project and all its deployments. This cannot be undone.",
+      inputSchema: {
+        name: z.string().describe("Project name to delete."),
+      },
     },
     async (args) =>
       run(async () => {
-        await client.deleteProject(args.project);
-        return {
-          content: [{ type: "text", text: `Deleted project "${args.project}".` }],
-        };
+        await client.deleteProject(args.name);
+        return `Deleted project "${args.name}".`;
       }),
   );
 

@@ -30,7 +30,7 @@ export interface CreatedApp {
  * Construct the configured Express app and its shared Cloudflare client.
  */
 export function createApp(config: Config): CreatedApp {
-  const client = new CloudflareClient(config);
+  const client = new CloudflareClient(config.accountId, config.apiToken);
 
   const app = express();
   // Don't advertise the framework.

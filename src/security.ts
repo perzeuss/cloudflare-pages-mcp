@@ -36,7 +36,8 @@ export function signToken(
 export function verifyToken(token: string, secret: string): Record<string, unknown> | null {
   const parts = token.split(".");
   if (parts.length !== 2) return null;
-  const [body, sig] = parts;
+  const body = parts[0]!;
+  const sig = parts[1]!;
   const expected = b64url(createHmac("sha256", secret).update(body).digest());
   const sigBuf = Buffer.from(sig);
   const expBuf = Buffer.from(expected);
