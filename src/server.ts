@@ -9,7 +9,9 @@ const inlineFileSchema = z.object({
   encoding: z
     .enum(["utf8", "base64"])
     .optional()
-    .describe('Encoding of `content`. Use "base64" for binary assets (images, fonts). Default: utf8.'),
+    .describe(
+      'Encoding of `content`. Use "base64" for binary assets (images, fonts). Default: utf8.',
+    ),
 });
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
@@ -45,7 +47,10 @@ export function createServer(): McpServer {
         "Create an empty Direct Upload Cloudflare Pages project. The project name becomes the <name>.pages.dev subdomain (lowercase letters, digits and hyphens). Use `deploy` afterwards to publish files. `deploy` can also auto-create the project, so calling this first is optional.",
       inputSchema: {
         name: z.string().describe("Project name; also the *.pages.dev subdomain."),
-        production_branch: z.string().optional().describe('Production branch name. Default: "main".'),
+        production_branch: z
+          .string()
+          .optional()
+          .describe('Production branch name. Default: "main".'),
       },
     },
     async (args) =>

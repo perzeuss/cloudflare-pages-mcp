@@ -13,13 +13,13 @@ API.
 
 ## Tools
 
-| Tool             | What it does                                                            |
-| ---------------- | ----------------------------------------------------------------------- |
-| `create_project` | Create an empty Direct Upload project (`<name>.pages.dev`).             |
-| `deploy`         | Upload files and publish a deployment. Auto-creates the project.        |
-| `list_projects`  | List all Pages projects in the account.                                 |
-| `get_project`    | Show one project's live URL, custom domains and production branch.      |
-| `delete_project` | Permanently delete a project and its deployments.                       |
+| Tool             | What it does                                                       |
+| ---------------- | ------------------------------------------------------------------ |
+| `create_project` | Create an empty Direct Upload project (`<name>.pages.dev`).        |
+| `deploy`         | Upload files and publish a deployment. Auto-creates the project.   |
+| `list_projects`  | List all Pages projects in the account.                            |
+| `get_project`    | Show one project's live URL, custom domains and production branch. |
+| `delete_project` | Permanently delete a project and its deployments.                  |
 
 ### `deploy`
 
@@ -31,7 +31,7 @@ recursively; inline files win on path conflicts):
   "project_name": "my-landing-page",
   "files": [
     { "path": "index.html", "content": "<!doctype html><h1>Hello</h1>" },
-    { "path": "assets/logo.png", "content": "<base64…>", "encoding": "base64" }
+    { "path": "assets/logo.png", "content": "<base64…>", "encoding": "base64" },
   ],
   // or: "directory": "/abs/path/to/site"
   // "branch": "preview"   // omit for a production deploy
@@ -44,7 +44,7 @@ Limits (enforced by Cloudflare): up to **20,000 files**, **25 MiB** per file.
 
 ## Setup
 
-Requires Node.js ≥ 20.
+Requires Node.js ≥ 22 (see `.nvmrc`).
 
 ```bash
 npm install
@@ -72,21 +72,51 @@ Add to your MCP client config (e.g. Claude Desktop
       "args": ["/abs/path/to/cloudflare-pages-mcp/dist/index.js"],
       "env": {
         "CLOUDFLARE_API_TOKEN": "…",
-        "CLOUDFLARE_ACCOUNT_ID": "…"
-      }
-    }
-  }
+        "CLOUDFLARE_ACCOUNT_ID": "…",
+      },
+    },
+  },
 }
 ```
 
 Then ask Claude to design a page and deploy it — it will call `deploy` and give
 you back the live URL.
 
+## Docker
+
+The image is a stdio MCP server (no ports). Pass the credentials as environment
+variables and keep stdin/stdout attached for the JSON-RPC transport:
+
+```bash
+docker build -t cloudflare-pages-mcp .
+docker run --rm -i \
+  -e CLOUDFLARE_API_TOKEN=… \
+  -e CLOUDFLARE_ACCOUNT_ID=… \
+  cloudflare-pages-mcp
+```
+
+A prebuilt image is published to `ghcr.io/perzeuss/cloudflare-pages-mcp`.
+
 ## Development
 
 ```bash
-npm run dev        # run from source via tsx
+npm run dev          # run from source via tsx
 npm run typecheck
 npm run lint
 npm run format
+npm test             # node:test suite
+npm run test:coverage
 ```
+
+This is a **stdio** server: stdout carries the JSON-RPC protocol, so all logging
+goes to **stderr** via `src/logger.ts`. Configuration is validated centrally in
+`src/config.ts`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and the
+[Conventional Commits](https://www.conventionalcommits.org/) /
+[semantic-release](https://semantic-release.gitbook.io/) conventions this
+project follows.
+
+## License
+
+[MIT](LICENSE) © Pascal Malbranche

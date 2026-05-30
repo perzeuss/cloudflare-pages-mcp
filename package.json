@@ -3,14 +3,36 @@
   "version": "0.1.0",
   "description": "MCP server to create Cloudflare Pages projects and deploy files (e.g. Claude-generated HTML) to a live *.pages.dev site via the Direct Upload API.",
   "type": "module",
+  "license": "MIT",
+  "author": "Pascal Malbranche",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/perzeuss/cloudflare-pages-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/perzeuss/cloudflare-pages-mcp/issues"
+  },
+  "homepage": "https://github.com/perzeuss/cloudflare-pages-mcp#readme",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "cloudflare",
+    "cloudflare-pages",
+    "deploy",
+    "static-site",
+    "direct-upload"
+  ],
   "bin": {
     "cloudflare-pages-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
@@ -20,7 +42,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test": "node --import tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
+    "test:coverage": "node --import tsx --test --test-concurrency=1 --experimental-test-coverage \"test/**/*.test.ts\"",
+    "release": "semantic-release"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.12.1",
@@ -29,10 +54,13 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
-    "@types/node": "20.19.0",
+    "@semantic-release/changelog": "6.0.3",
+    "@semantic-release/git": "10.0.1",
+    "@types/node": "22.10.5",
     "eslint": "9.39.4",
     "eslint-config-prettier": "10.1.8",
     "prettier": "3.8.3",
+    "semantic-release": "24.2.9",
     "tsx": "4.20.3",
     "typescript": "5.9.3",
     "typescript-eslint": "8.60.0"

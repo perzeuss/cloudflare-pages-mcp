@@ -1,0 +1,47 @@
+name: Dependabot auto-merge
+
+# Auto-merge non-major Dependabot PRs after verifying them, so routine
+# dependency updates don't pile up. Major bumps are left for manual review.
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        uses: actions/checkout@v6
+      - name: Set up Node
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        run: |
+          npm ci
+          npm run format:check
+          npm run lint
+          npm run typecheck
+          npm run build
+          npm test
+          npm audit --omit=dev --audit-level=high
+
+      - name: Merge
+        if: steps.meta.outputs.update-type != 'version-update:semver-major'
+        run: gh pr merge --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

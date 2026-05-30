@@ -71,7 +71,9 @@ export async function collectFiles(opts: {
     throw new Error("No files to deploy. Provide `files` and/or a `directory` containing files.");
   }
   if (result.length > MAX_FILES) {
-    throw new Error(`Too many files: ${result.length} (Cloudflare Pages allows up to ${MAX_FILES}).`);
+    throw new Error(
+      `Too many files: ${result.length} (Cloudflare Pages allows up to ${MAX_FILES}).`,
+    );
   }
   for (const file of result) {
     if (file.contents.byteLength > MAX_FILE_SIZE) {

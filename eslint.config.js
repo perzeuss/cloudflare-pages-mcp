@@ -1,3 +1,4 @@
+// @ts-check
 // Flat ESLint config. Non-type-checked rule sets keep lint fast; `tsc` covers types.
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
@@ -5,7 +6,7 @@ import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
   {
-    ignores: ["**/node_modules/**", "**/dist/**", "**/*.tsbuildinfo"],
+    ignores: ["dist/**", "node_modules/**", "coverage/**", "**/*.tsbuildinfo"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

@@ -1,3 +1,4 @@
+import { loadConfig } from "./config.js";
 import { hashContent } from "./hash.js";
 import { contentTypeFor } from "./mime.js";
 import type { DeployFile } from "./files.js";
@@ -50,14 +51,12 @@ export class CloudflareClient {
 
   /** Reads credentials from the environment, throwing a clear error if absent. */
   static fromEnv(): CloudflareClient {
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-    const apiToken = process.env.CLOUDFLARE_API_TOKEN;
-    if (!accountId || !apiToken) {
-      throw new CloudflareError(
-        "Missing credentials: set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the MCP server environment.",
-      );
+    try {
+      const config = loadConfig();
+      return new CloudflareClient(config.cloudflareAccountId, config.cloudflareApiToken);
+    } catch (err) {
+      throw new CloudflareError(err instanceof Error ? err.message : String(err));
     }
-    return new CloudflareClient(accountId, apiToken);
   }
 
   private async json<T>(path: string, init: RequestInit = {}, token = this.apiToken): Promise<T> {
@@ -224,7 +223,10 @@ function bucketize(payloads: AssetPayload[]): AssetPayload[][] {
   let bytes = 0;
   for (const payload of payloads) {
     const size = payload.value.length;
-    if (current.length >= MAX_BUCKET_FILES || (current.length > 0 && bytes + size > MAX_BUCKET_BYTES)) {
+    if (
+      current.length >= MAX_BUCKET_FILES ||
+      (current.length > 0 && bytes + size > MAX_BUCKET_BYTES)
+    ) {
       buckets.push(current);
       current = [];
       bytes = 0;
