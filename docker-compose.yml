@@ -17,8 +17,18 @@ services:
     # Prebuilt multi-arch image (remove the `build:` block above to use it):
     # image: ghcr.io/perzeuss/cloudflare-pages-mcp:latest
     restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
+    # Behind a reverse proxy on the same Docker network, no host port needs to
+    # be published — the proxy reaches this service directly as
+    # `cloudflare-pages-mcp:3000`. `expose` is documentation only and never
+    # binds a host port, so it cannot collide with something already on the host.
+    expose:
+      - "3000"
+    # To reach the server directly from the host (e.g. local testing without a
+    # proxy), uncomment this and set HOST_PORT to a free port. Avoid 3000 if it
+    # is already allocated:
+    #   HOST_PORT=8787 docker compose up -d
+    # ports:
+    #   - "${HOST_PORT:-3000}:3000"
     environment:
       # --- Required: Cloudflare credentials --------------------------------
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN}

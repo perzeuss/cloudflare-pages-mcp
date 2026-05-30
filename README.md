@@ -63,12 +63,26 @@ Authentication modes are chosen automatically:
 cp .env.example .env   # fill in CLOUDFLARE_* and (for Claude) OAUTH_*
 docker compose up -d --build
 
-curl -s http://localhost:3000/health
+# Verify from inside the container (no host port is published by default):
+docker compose exec cloudflare-pages-mcp \
+  node -e "fetch('http://localhost:3000/health').then(r=>r.text()).then(console.log)"
 # {"status":"ok","auth":"oauth", ...}
 ```
 
-Run it behind a reverse proxy that terminates TLS and set `PUBLIC_BASE_URL`
-(and therefore `OAUTH_ISSUER_URL`) to your public `https://` URL.
+By default the service only `expose`s port 3000 on the Docker network — it does
+**not** publish a host port, so it never collides with something already bound
+on the host. Run it behind a reverse proxy (Caddy, nginx, Traefik, …) on the
+same network that terminates TLS and forwards to `cloudflare-pages-mcp:3000`,
+and set `PUBLIC_BASE_URL` (and therefore `OAUTH_ISSUER_URL`) to your public
+`https://` URL.
+
+To reach it directly from the host instead (local testing without a proxy),
+uncomment the `ports:` block in `docker-compose.yml` and pick a free port:
+
+```bash
+HOST_PORT=8787 docker compose up -d
+curl -s http://localhost:8787/health
+```
 
 ## Quickstart (local)
 
