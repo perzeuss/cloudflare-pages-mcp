@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { describe, it } from "node:test";
 
 import { collectFiles, normalizePath, MAX_FILE_SIZE } from "../src/files.js";
 
@@ -29,18 +26,12 @@ describe("normalizePath", () => {
 });
 
 describe("collectFiles", () => {
-  let dir: string;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "cfpages-"));
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it("throws when no files and no directory are provided", async () => {
+  it("throws when no files are provided", async () => {
     await assert.rejects(() => collectFiles({}), /No files to deploy/);
+  });
+
+  it("throws when the files array is empty", async () => {
+    await assert.rejects(() => collectFiles({ files: [] }), /No files to deploy/);
   });
 
   it("collects inline files with normalized paths", async () => {
@@ -65,26 +56,26 @@ describe("collectFiles", () => {
     assert.equal(result[0]!.contents.toString("utf8"), "binary");
   });
 
-  it("walks a directory recursively and skips ignored names", async () => {
-    await writeFile(path.join(dir, "index.html"), "root");
-    await mkdir(path.join(dir, "assets"));
-    await writeFile(path.join(dir, "assets", "app.css"), "css");
-    await mkdir(path.join(dir, "node_modules"));
-    await writeFile(path.join(dir, "node_modules", "ignored.js"), "nope");
-
-    const result = await collectFiles({ directory: dir });
+  it("collects multiple inline files with normalized paths", async () => {
+    const result = await collectFiles({
+      files: [
+        { path: "index.html", content: "root" },
+        { path: "./assets/app.css", content: "css" },
+      ],
+    });
     const paths = result.map((f) => f.path).sort();
     assert.deepEqual(paths, ["/assets/app.css", "/index.html"]);
   });
 
-  it("lets inline files win over directory files on path conflicts", async () => {
-    await writeFile(path.join(dir, "index.html"), "from-dir");
+  it("lets a later inline file win over an earlier one on path conflicts", async () => {
     const result = await collectFiles({
-      directory: dir,
-      files: [{ path: "index.html", content: "from-inline" }],
+      files: [
+        { path: "index.html", content: "first" },
+        { path: "index.html", content: "second" },
+      ],
     });
     assert.equal(result.length, 1);
-    assert.equal(result[0]!.contents.toString("utf8"), "from-inline");
+    assert.equal(result[0]!.contents.toString("utf8"), "second");
   });
 
   it("rejects files exceeding the per-file size limit", async () => {

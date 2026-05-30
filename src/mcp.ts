@@ -88,17 +88,15 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     {
       annotations: { title: "Deploy files to Cloudflare Pages" },
       description:
-        "Upload files and create a deployment, publishing a live site. Provide files inline via `files` and/or point at a local `directory` (walked recursively); inline files win on path conflicts. Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs.",
+        "Upload files and create a deployment, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs.",
       inputSchema: {
         project_name: z.string().describe("Target Pages project name."),
         files: z
           .array(inlineFileSchema)
-          .optional()
-          .describe("Files to deploy, defined inline (e.g. Claude-generated HTML/CSS/JS)."),
-        directory: z
-          .string()
-          .optional()
-          .describe("Absolute path to a local directory whose contents are deployed."),
+          .min(1)
+          .describe(
+            'The site files to deploy, defined inline. Each entry has a site-relative `path` and its `content` (use encoding "base64" for binary assets).',
+          ),
         branch: z
           .string()
           .optional()
@@ -117,10 +115,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     },
     async (args) =>
       run(async () => {
-        const files = await collectFiles({
-          files: args.files,
-          directory: args.directory,
-        });
+        const files = await collectFiles({ files: args.files });
 
         if (args.create_if_missing !== false && !(await client.projectExists(args.project_name))) {
           await client.createProject(args.project_name, args.production_branch ?? "main");

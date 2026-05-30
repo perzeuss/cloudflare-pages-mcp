@@ -1,8 +1,8 @@
 # cloudflare-pages-mcp
 
 Remote MCP server (Streamable HTTP + OAuth 2.1) to create Cloudflare Pages
-projects and deploy a directory of static files (for example, Claude-generated
-HTML) to a live `*.pages.dev` site using the Cloudflare Direct Upload API.
+projects and deploy static files (for example, Claude-generated HTML/CSS/JS)
+to a live `*.pages.dev` site using the Cloudflare Direct Upload API.
 
 It runs as an HTTP service so you can add it to Claude as a **custom
 connector** over HTTPS, with built-in OAuth 2.1 (PKCE, dynamic client
@@ -11,7 +11,7 @@ registration) gated behind a single shared password.
 ## Tools
 
 - `create_project` — create a new Pages project (`<name>.pages.dev`).
-- `deploy` — upload a directory and publish a deployment.
+- `deploy` — upload a set of inline files and publish a deployment.
 - `list_projects` — list existing projects.
 - `get_project` — fetch one project's details.
 - `delete_project` — delete a project.
