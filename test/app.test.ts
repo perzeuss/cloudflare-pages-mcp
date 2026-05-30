@@ -79,7 +79,9 @@ test("OAuth discovery endpoint responds when OAuth is configured", async () => {
   assert.equal(authMode, "oauth");
   const res = await request(app).get("/.well-known/oauth-authorization-server");
   assert.equal(res.status, 200);
-  assert.equal(res.body.issuer, "https://example.com");
+  // The SDK normalizes the issuer URL (may add a trailing slash).
+  assert.equal(res.body.issuer.replace(/\/$/, ""), "https://example.com");
+  assert.deepEqual(res.body.code_challenge_methods_supported, ["S256"]);
 });
 
 test("buildMcpServer registers the five Cloudflare Pages tools", async () => {
