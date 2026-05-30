@@ -1,0 +1,20 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Node
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Secrets (NEVER commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key

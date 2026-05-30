@@ -1,0 +1,40 @@
+{
+  "name": "cloudflare-pages-mcp",
+  "version": "0.1.0",
+  "description": "MCP server to create Cloudflare Pages projects and deploy files (e.g. Claude-generated HTML) to a live *.pages.dev site via the Direct Upload API.",
+  "type": "module",
+  "bin": {
+    "cloudflare-pages-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "dev": "node --import tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.12.1",
+    "blake3-wasm": "2.1.5",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@types/node": "20.19.0",
+    "eslint": "9.39.4",
+    "eslint-config-prettier": "10.1.8",
+    "prettier": "3.8.3",
+    "tsx": "4.20.3",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.60.0"
+  }
+}
