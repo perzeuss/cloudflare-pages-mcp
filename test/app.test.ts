@@ -9,8 +9,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import request from "supertest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { createApp } from "../src/app.ts";
+import { buildMcpServer } from "../src/mcp.ts";
+import { CloudflareClient } from "../src/cloudflare.ts";
 import type { Config } from "../src/config.ts";
 
 const baseConfig: Config = {
@@ -78,28 +82,28 @@ test("OAuth discovery endpoint responds when OAuth is configured", async () => {
   assert.equal(res.body.issuer, "https://example.com");
 });
 
-test("tools/list returns the five Cloudflare Pages tools", async () => {
-  const { app } = makeApp();
-  const res = await request(app)
-    .post("/mcp")
-    .set("Accept", "application/json, text/event-stream")
-    .send({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/list",
-      params: {},
-    });
-  assert.equal(res.status, 200);
-  // Streamable HTTP returns the JSON-RPC payload as an SSE event; the tool
-  // names appear in the response body regardless of framing.
-  const body = res.text;
-  for (const tool of [
+test("buildMcpServer registers the five Cloudflare Pages tools", async () => {
+  // Drive the MCP server over an in-memory transport pair so we exercise the
+  // real protocol (initialize + tools/list) without an HTTP session, and
+  // without ever reaching the Cloudflare API.
+  const client = new Client({ name: "test", version: "1.0" });
+  const server = buildMcpServer({
+    config: baseConfig,
+    client: new CloudflareClient(baseConfig.accountId, baseConfig.apiToken),
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+
+  const { tools } = await client.listTools();
+  const names = tools.map((t) => t.name).sort();
+  assert.deepEqual(names, [
     "create_project",
-    "deploy",
-    "list_projects",
-    "get_project",
     "delete_project",
-  ]) {
-    assert.ok(body.includes(tool), `expected tools/list to include ${tool}`);
-  }
+    "deploy",
+    "get_project",
+    "list_projects",
+  ]);
+
+  await client.close();
+  await server.close();
 });
