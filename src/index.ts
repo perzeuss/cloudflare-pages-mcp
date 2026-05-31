@@ -53,6 +53,9 @@ function main() {
 try {
   main();
 } catch (err) {
-  console.error("Fatal:", err instanceof Error ? err.message : err);
+  // Log only the error message, never the raw thrown value — the latter could
+  // embed configuration (e.g. OAuth secrets). A startup failure stays
+  // diagnosable without leaking sensitive data to logs.
+  console.error(`Fatal: ${err instanceof Error ? err.message : "unknown error"}`);
   process.exit(1);
 }

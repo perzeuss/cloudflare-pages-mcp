@@ -32,7 +32,7 @@ import {
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 
 import type { OAuthConfig } from "./config.js";
-import { escapeHtml, safeStrEqual, signToken, verifyToken } from "./security.js";
+import { escapeHtml, signToken, verifyPassword, verifyToken } from "./security.js";
 
 type Claims = Record<string, unknown>;
 
@@ -139,7 +139,7 @@ export class StatelessOAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    if (!safeStrEqual(submittedPassword, this.cfg.password)) {
+    if (!verifyPassword(submittedPassword, this.cfg.password)) {
       res.status(401).setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(renderConsent(actionUrl, formFields, "Incorrect password."));
       return;

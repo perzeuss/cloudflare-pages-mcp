@@ -3,7 +3,7 @@
  * tested in isolation.
  */
 
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64url");
@@ -75,6 +75,19 @@ export function safeStrEqual(a: string, b: string): boolean {
   const ha = createHash("sha256").update(a, "utf8").digest();
   const hb = createHash("sha256").update(b, "utf8").digest();
   return timingSafeEqual(ha, hb);
+}
+
+/**
+ * Verify a submitted password against the expected one in constant time, using
+ * scrypt — a deliberately expensive KDF — so a guess cannot be brute-forced
+ * cheaply. Both inputs are derived with the same per-call random salt, so equal
+ * passwords yield equal digests regardless of length, and timing leaks neither.
+ */
+export function verifyPassword(submitted: string, expected: string): boolean {
+  const salt = randomBytes(16);
+  const a = scryptSync(submitted, salt, 32);
+  const b = scryptSync(expected, salt, 32);
+  return timingSafeEqual(a, b);
 }
 
 /** Parse a comma/whitespace separated environment list into trimmed entries. */

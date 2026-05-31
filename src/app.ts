@@ -45,11 +45,22 @@ export function createApp(config: Config): CreatedApp {
   // in rate limiting and for building public links behind TLS termination).
   app.set("trust proxy", config.trustProxy);
 
-  // Security headers. This is a JSON API, so CSP is disabled; responses must
-  // remain reachable cross-origin (Claude connector traffic).
+  // Security headers. Responses must remain reachable cross-origin (Claude
+  // connector traffic). A strict CSP still applies — the only HTML surface is
+  // the OAuth consent page, which uses an inline <style> block and posts back
+  // to this same origin.
   app.use(
     helmet({
-      contentSecurityPolicy: false,
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          defaultSrc: ["'none'"],
+          styleSrc: ["'unsafe-inline'"],
+          formAction: ["'self'"],
+          baseUri: ["'none'"],
+          frameAncestors: ["'none'"],
+        },
+      },
       crossOriginResourcePolicy: { policy: "cross-origin" },
     }),
   );
