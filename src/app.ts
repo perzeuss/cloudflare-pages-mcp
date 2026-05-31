@@ -142,8 +142,10 @@ export function createApp(config: Config): CreatedApp {
     const issuerUrl = new URL(config.oauth.issuerUrl);
     const isLocal = issuerUrl.hostname === "localhost" || issuerUrl.hostname === "127.0.0.1";
     if (issuerUrl.protocol !== "https:" && !isLocal) {
+      // Don't echo the configured URL into the error (it propagates to logs and
+      // is part of the OAuth config) — point at the env vars to fix instead.
       throw new Error(
-        `OAuth issuer URL must be https (got "${config.oauth.issuerUrl}"). ` +
+        "OAuth issuer URL must be an https:// URL (or localhost for testing). " +
           "Set OAUTH_ISSUER_URL / PUBLIC_BASE_URL to your public https URL.",
       );
     }
