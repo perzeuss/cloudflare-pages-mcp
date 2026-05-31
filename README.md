@@ -16,6 +16,26 @@ registration) gated behind a single shared password.
   deploy for large sites: open a deployment, append files across several small
   calls, then publish them as one deployment (works around the per-call output
   size limit).
+- `create_upload_url` — get a short-lived signed URL to upload a large **binary**
+  asset (image, video, font) into a staged deployment with an HTTP `PUT`, so its
+  bytes never pass through the model. An agent with a shell uploads the local
+  file directly, e.g. `curl -T ./hero.jpg "<upload_url>"`. Requires
+  `PUBLIC_BASE_URL` to be set.
+
+### Large sites and binary assets
+
+A remote connector receives every tool argument as model output, so text files
+go inline (`deploy` for small sites, `create_deployment` → `add_files` →
+`publish_deployment` for large ones). **Binary** assets are different: base64
+inline is wasteful and quickly exceeds the per-call limit. Instead:
+
+1. `create_deployment` → `deploy_id`
+2. (optionally) `add_files` for the HTML/CSS/JS
+3. `create_upload_url` with the `deploy_id` and target `path` → returns a signed
+   URL + a ready `curl -T` command; upload each image/video straight from disk
+4. `publish_deployment` → publishes everything as one deployment
+
+The upload bytes stream directly to the server and never go through the model.
 - `list_projects` — list existing projects.
 - `get_project` — fetch one project's details.
 - `delete_project` — delete a project.

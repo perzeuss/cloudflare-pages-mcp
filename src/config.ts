@@ -66,6 +66,8 @@ export interface Config {
   allowedOrigins?: string[];
   /** Optional bearer token. If set, every MCP request must send it. */
   authToken?: string;
+  /** HMAC secret used to sign short-lived direct-upload URLs. */
+  uploadSigningSecret: string;
   /** OAuth authorization server, enabled when OAUTH_PASSWORD is set. */
   oauth?: OAuthConfig;
 }
@@ -151,6 +153,13 @@ export function loadConfig(): Config {
       return list.length > 0 ? list : undefined;
     })(),
     authToken: process.env.MCP_AUTH_TOKEN?.trim() || undefined,
+    // Reuse the OAuth signing secret when present so upload URLs survive
+    // restarts in production; otherwise fall back to a per-process secret
+    // (upload URLs are short-lived, so an ephemeral secret is acceptable).
+    uploadSigningSecret:
+      process.env.UPLOAD_SIGNING_SECRET?.trim() ||
+      process.env.OAUTH_SIGNING_SECRET?.trim() ||
+      randomBytes(32).toString("hex"),
     oauth: readOAuthConfig(),
   };
 }

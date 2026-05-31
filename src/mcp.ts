@@ -11,8 +11,12 @@ import { z } from "zod";
 
 import type { Config } from "./config.js";
 import { CloudflareClient } from "./cloudflare.js";
-import { collectFiles, inlineToDeployFile } from "./files.js";
+import { collectFiles, inlineToDeployFile, normalizePath } from "./files.js";
+import { signToken } from "./security.js";
 import { StagingStore } from "./staging.js";
+
+/** How long a signed upload URL is valid, in seconds. */
+const UPLOAD_URL_TTL_SECONDS = 30 * 60;
 
 export interface ServerContext {
   config: Config;
@@ -57,7 +61,7 @@ function liveUrls(project: { name: string; subdomain?: string }, deploymentUrl?:
 }
 
 export function buildMcpServer(ctx: ServerContext): McpServer {
-  const { client, staging } = ctx;
+  const { client, staging, config } = ctx;
 
   const server = new McpServer({
     name: "cloudflare-pages-mcp",
@@ -199,6 +203,51 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           `Added ${deployFiles.length} file(s) to staged deployment ${args.deploy_id}.`,
           `Total staged: ${staged.files.size} file(s).`,
           "Call add_files again for more, or publish_deployment to go live.",
+        ].join("\n");
+      }),
+  );
+
+  server.registerTool(
+    "create_upload_url",
+    {
+      annotations: { title: "Get an upload URL for a large binary asset" },
+      description:
+        'Get a short-lived, signed URL to upload a single large binary file (image, video, font, …) into a staged deployment WITHOUT passing its bytes through the model. Returns a URL and a ready-to-run curl command; upload the local file with an HTTP PUT (the raw file as the body), e.g. `curl -T ./photo.jpg "<upload_url>"`. The file is added to the staged deployment under `path`. Requires a deploy_id from create_deployment and that the server has PUBLIC_BASE_URL configured.',
+      inputSchema: {
+        deploy_id: z.string().describe("The deploy_id returned by create_deployment."),
+        path: z
+          .string()
+          .describe('Site-relative path the uploaded file will live at, e.g. "assets/hero.jpg".'),
+      },
+    },
+    async (args) =>
+      run(async () => {
+        // Validate the staged deployment exists before handing out a URL.
+        staging.get(args.deploy_id);
+
+        const base = config.publicBaseUrl;
+        if (!base) {
+          throw new Error(
+            "Uploads require PUBLIC_BASE_URL to be configured on the server so a reachable upload URL can be built.",
+          );
+        }
+
+        const path = normalizePath(args.path);
+        const token = signToken(
+          { t: "upload", did: args.deploy_id, p: path },
+          config.uploadSigningSecret,
+          UPLOAD_URL_TTL_SECONDS,
+        );
+        const uploadUrl = new URL(`/upload/${token}`, base).href;
+
+        return [
+          `Upload URL for "${path}" (valid ~${Math.round(UPLOAD_URL_TTL_SECONDS / 60)} min):`,
+          uploadUrl,
+          "",
+          "Upload the local file with an HTTP PUT, for example:",
+          `  curl -T <local-file> "${uploadUrl}"`,
+          "",
+          "The file is added to the staged deployment; call publish_deployment when done.",
         ].join("\n");
       }),
   );

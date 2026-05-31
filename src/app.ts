@@ -16,8 +16,9 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import type { Config } from "./config.js";
 import { CloudflareClient } from "./cloudflare.js";
 import { buildMcpServer } from "./mcp.js";
+import { MAX_FILE_SIZE, normalizePath } from "./files.js";
 import { StatelessOAuthProvider } from "./oauth.js";
-import { isOriginAllowed, safeStrEqual } from "./security.js";
+import { isOriginAllowed, safeStrEqual, verifyToken } from "./security.js";
 import { StagingStore } from "./staging.js";
 
 export type AuthMode = "oauth" | "token" | "open";
@@ -25,6 +26,8 @@ export type AuthMode = "oauth" | "token" | "open";
 export interface CreatedApp {
   app: Express;
   authMode: AuthMode;
+  /** The shared staging store backing chunked deployments. */
+  staging: StagingStore;
 }
 
 /**
@@ -61,8 +64,9 @@ export function createApp(config: Config): CreatedApp {
         limit: config.rateLimitMax,
         standardHeaders: true,
         legacyHeaders: false,
-        // Don't rate-limit health checks from orchestrators / uptime monitors.
-        skip: (req) => req.path === "/health",
+        // Don't rate-limit health checks, or signed asset uploads (a single
+        // deploy may push many files and each PUT is already token-gated).
+        skip: (req) => req.path === "/health" || req.path.startsWith("/upload/"),
         message: {
           jsonrpc: "2.0",
           error: { code: -32029, message: "Too many requests" },
@@ -162,6 +166,44 @@ export function createApp(config: Config): CreatedApp {
     });
   });
 
+  // --- Direct binary upload for staged deployments -------------------------
+  // Large binary assets (images, video) are impractical to pass inline through
+  // the model. Instead `create_upload_url` hands the agent a short-lived,
+  // HMAC-signed URL; a shell tool (curl) streams the file straight here, so the
+  // bytes never pass through the model. The signed token in the path IS the
+  // auth for this route, so it is intentionally not behind the MCP auth guard.
+  app.put(
+    "/upload/:token",
+    express.raw({ type: "*/*", limit: MAX_FILE_SIZE }),
+    (req: Request, res: Response) => {
+      const tokenParam = req.params.token;
+      const token = Array.isArray(tokenParam) ? (tokenParam[0] ?? "") : (tokenParam ?? "");
+      const claims = verifyToken(token, config.uploadSigningSecret);
+      if (!claims || claims.t !== "upload") {
+        res.status(401).json({ error: "Invalid or expired upload token" });
+        return;
+      }
+      const deployId = claims.did as string;
+      const path = normalizePath(claims.p as string);
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.byteLength === 0) {
+        res.status(400).json({ error: "Empty request body. Send the file as the raw PUT body." });
+        return;
+      }
+      try {
+        const staged = staging.addFiles(deployId, [{ path, contents: body }]);
+        res.json({
+          status: "ok",
+          path,
+          bytes: body.byteLength,
+          staged_files: staged.files.size,
+        });
+      } catch (err) {
+        res.status(404).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
   // Stateless Streamable HTTP MCP endpoint.
   app.post("/mcp", ...mcpGuards, async (req: Request, res: Response) => {
     try {
@@ -198,5 +240,5 @@ export function createApp(config: Config): CreatedApp {
   app.get("/mcp", methodNotAllowed);
   app.delete("/mcp", methodNotAllowed);
 
-  return { app, authMode };
+  return { app, authMode, staging };
 }

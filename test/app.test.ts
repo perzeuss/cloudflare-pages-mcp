@@ -16,6 +16,7 @@ import { createApp } from "../src/app.ts";
 import { buildMcpServer } from "../src/mcp.ts";
 import { CloudflareClient } from "../src/cloudflare.ts";
 import { StagingStore } from "../src/staging.ts";
+import { signToken } from "../src/security.ts";
 import type { Config } from "../src/config.ts";
 
 const baseConfig: Config = {
@@ -28,6 +29,7 @@ const baseConfig: Config = {
   maxBodySize: "25mb",
   rateLimitWindowMs: 60000,
   rateLimitMax: 60,
+  uploadSigningSecret: "test-upload-secret",
 };
 
 function makeApp(overrides: Partial<Config> = {}) {
@@ -40,6 +42,48 @@ test("GET /health returns ok and auth mode", async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.status, "ok");
   assert.equal(res.body.auth, "open");
+});
+
+test("PUT /upload with a valid token stages the file", async () => {
+  const { app, staging } = makeApp();
+  const { id } = staging.create({
+    projectName: "p",
+    createIfMissing: true,
+    productionBranch: "main",
+  });
+  const token = signToken(
+    { t: "upload", did: id, p: "/assets/logo.png" },
+    baseConfig.uploadSigningSecret,
+    600,
+  );
+  const res = await request(app)
+    .put(`/upload/${token}`)
+    .set("Content-Type", "application/octet-stream")
+    .send(Buffer.from("PNGDATA"));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.path, "/assets/logo.png");
+  assert.equal(res.body.bytes, 7);
+  assert.equal(staging.get(id).files.size, 1);
+});
+
+test("PUT /upload with an invalid token is rejected", async () => {
+  const { app } = makeApp();
+  const res = await request(app).put("/upload/not-a-real-token").send(Buffer.from("x"));
+  assert.equal(res.status, 401);
+});
+
+test("PUT /upload for an unknown deploy_id returns 404", async () => {
+  const { app } = makeApp();
+  const token = signToken(
+    { t: "upload", did: "missing", p: "/a.png" },
+    baseConfig.uploadSigningSecret,
+    600,
+  );
+  const res = await request(app)
+    .put(`/upload/${token}`)
+    .set("Content-Type", "application/octet-stream")
+    .send(Buffer.from("x"));
+  assert.equal(res.status, 404);
 });
 
 test("POST /mcp without token is unauthorized when token is set", async () => {
@@ -104,6 +148,7 @@ test("buildMcpServer registers the Cloudflare Pages tools", async () => {
     "add_files",
     "create_deployment",
     "create_project",
+    "create_upload_url",
     "delete_project",
     "deploy",
     "get_project",
