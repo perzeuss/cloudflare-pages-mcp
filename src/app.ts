@@ -185,10 +185,45 @@ export function createApp(config: Config): CreatedApp {
   // HMAC-signed URL; a shell tool (curl) streams the file straight here, so the
   // bytes never pass through the model. The signed token in the path IS the
   // auth for this route, so it is intentionally not behind the MCP auth guard.
+  //
+  // CORS for browser-based uploaders (e.g. a sandboxed agent on an opaque
+  // origin) is opt-in via UPLOAD_ALLOWED_ORIGINS. It is off by default (curl
+  // ignores CORS). Enabling it is safe: the signed token is the authorization
+  // and the endpoint uses no cookies, so "*" can be allowed without exposing
+  // anything an attacker couldn't already reach with the token.
+  const uploadCorsOrigins = config.uploadAllowedOrigins ?? [];
+  const setUploadCors = (req: Request, res: Response): void => {
+    if (uploadCorsOrigins.length === 0) return; // disabled
+    const reqOrigin = req.headers.origin as string | undefined;
+    let allowOrigin: string | undefined;
+    if (uploadCorsOrigins.includes("*")) {
+      allowOrigin = "*";
+    } else if (reqOrigin && uploadCorsOrigins.includes(reqOrigin)) {
+      allowOrigin = reqOrigin;
+    }
+    if (!allowOrigin) return; // origin present but not allow-listed
+    res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+    if (allowOrigin !== "*") res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "PUT, OPTIONS");
+    const requested = req.headers["access-control-request-headers"];
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      typeof requested === "string" && requested ? requested : "Content-Type",
+    );
+    res.setHeader("Access-Control-Max-Age", "86400");
+  };
+
+  // Preflight for the cross-origin upload PUT (non-simple Content-Type).
+  app.options("/upload/:token", (req: Request, res: Response) => {
+    setUploadCors(req, res);
+    res.status(204).end();
+  });
+
   app.put(
     "/upload/:token",
     express.raw({ type: "*/*", limit: MAX_FILE_SIZE }),
     (req: Request, res: Response) => {
+      setUploadCors(req, res);
       const tokenParam = req.params.token;
       const token = Array.isArray(tokenParam) ? (tokenParam[0] ?? "") : (tokenParam ?? "");
       const claims = verifyToken(token, config.uploadSigningSecret);

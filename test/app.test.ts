@@ -86,6 +86,56 @@ test("PUT /upload for an unknown deploy_id returns 404", async () => {
   assert.equal(res.status, 404);
 });
 
+test("upload CORS is disabled by default (no Allow-Origin header)", async () => {
+  const { app } = makeApp();
+  const res = await request(app)
+    .options("/upload/whatever")
+    .set("Origin", "https://sandbox.example")
+    .set("Access-Control-Request-Method", "PUT");
+  assert.equal(res.status, 204);
+  assert.equal(res.headers["access-control-allow-origin"], undefined);
+});
+
+test("upload CORS preflight allows any origin (incl. opaque) when set to *", async () => {
+  const { app } = makeApp({ uploadAllowedOrigins: ["*"] });
+  const res = await request(app)
+    .options("/upload/whatever")
+    .set("Origin", "null") // opaque origin (sandbox)
+    .set("Access-Control-Request-Method", "PUT");
+  assert.equal(res.status, 204);
+  assert.equal(res.headers["access-control-allow-origin"], "*");
+  assert.match(res.headers["access-control-allow-methods"], /PUT/);
+});
+
+test("upload PUT carries the CORS header when enabled", async () => {
+  const { app, staging } = makeApp({ uploadAllowedOrigins: ["*"] });
+  const { id } = staging.create({
+    projectName: "p",
+    createIfMissing: true,
+    productionBranch: "main",
+  });
+  const token = signToken(
+    { t: "upload", did: id, p: "/a.png" },
+    baseConfig.uploadSigningSecret,
+    600,
+  );
+  const res = await request(app)
+    .put(`/upload/${token}`)
+    .set("Origin", "null")
+    .set("Content-Type", "application/octet-stream")
+    .send(Buffer.from("x"));
+  assert.equal(res.status, 200);
+  assert.equal(res.headers["access-control-allow-origin"], "*");
+});
+
+test("upload CORS echoes an allow-listed origin and omits others", async () => {
+  const { app } = makeApp({ uploadAllowedOrigins: ["https://ok.example"] });
+  const ok = await request(app).options("/upload/x").set("Origin", "https://ok.example");
+  assert.equal(ok.headers["access-control-allow-origin"], "https://ok.example");
+  const bad = await request(app).options("/upload/x").set("Origin", "https://evil.example");
+  assert.equal(bad.headers["access-control-allow-origin"], undefined);
+});
+
 test("POST /mcp without token is unauthorized when token is set", async () => {
   const { app } = makeApp({ authToken: "secret" });
   const res = await request(app).post("/mcp").send({ jsonrpc: "2.0" });
