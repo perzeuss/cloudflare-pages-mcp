@@ -1,5 +1,9 @@
 # cloudflare-pages-mcp
 
+[![CI](https://github.com/perzeuss/cloudflare-pages-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/perzeuss/cloudflare-pages-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+![Node](https://img.shields.io/badge/node-%3E%3D22-3c873a.svg)
+
 Remote MCP server (Streamable HTTP + OAuth 2.1) to create Cloudflare Pages
 projects and deploy static files (for example, Claude-generated HTML/CSS/JS)
 to a live `*.pages.dev` site using the Cloudflare Direct Upload API.
@@ -7,6 +11,13 @@ to a live `*.pages.dev` site using the Cloudflare Direct Upload API.
 It runs as an HTTP service so you can add it to Claude as a **custom
 connector** over HTTPS, with built-in OAuth 2.1 (PKCE, dynamic client
 registration) gated behind a single shared password.
+
+- [Tools](#tools)
+- [Deploying a site from disk](#deploying-a-site-from-disk-recommended)
+- [Browser & sandbox uploads (CORS)](#browser-and-sandbox-uploads-cors)
+- [Endpoints](#endpoints) · [Configuration](#configuration)
+- [Quickstart (Docker)](#quickstart-docker) · [Quickstart (local)](#quickstart-local)
+- [Connect to Claude](#connect-to-claude) · [Security](#security)
 
 ## Tools
 
@@ -52,6 +63,15 @@ through the model:
 
 ### Use it from an agent (copy-paste prompt)
 
+The skill is **optional ergonomics**, not a requirement: the tool descriptions
+already steer the model through the workflow, and `create_upload_url` returns
+ready-to-run `curl -T` commands plus a manifest — so an agent with a shell can
+upload from those directly, without installing anything. Use the prompt below
+when you want the `upload.sh` manifest helper and a nudge to prefer the
+from-disk path over inline uploads. (An agent that can call the tools but can't
+make its own HTTP requests can't upload at all — it's limited to the inline
+`deploy` tool.)
+
 Paste this to an agent that has a shell and the `cloudflare-pages-mcp` connector
 connected. It installs the upload skill, then deploys your site from disk —
 without ever passing file contents through the model:
@@ -81,10 +101,46 @@ Do NOT pass file contents inline (no add_files), and do NOT set any CF_* /
 PROJECT_NAME env vars — the upload needs nothing but the signed URL.
 ```
 
+### Browser and sandbox uploads (CORS)
+
+Uploads default to **server-to-server** (`curl` ignores CORS). To let a
+**browser-based** uploader — e.g. a sandboxed agent whose origin is the opaque
+`Origin: null` — `PUT` to the signed URL, enable CORS with
+`UPLOAD_ALLOWED_ORIGINS`:
+
+```bash
+UPLOAD_ALLOWED_ORIGINS=*      # any origin, incl. opaque `null`
+# or a comma-separated allow-list: https://app.example.com,https://other.example
+```
+
+This is safe to open: the signed token in the URL is the authorization and the
+endpoint uses no cookies, so `*` exposes nothing the token wouldn't already.
+When enabled, both `/upload/:token` and `/health` answer the `OPTIONS` preflight
+(`204`) and return the CORS headers; the preflight runs **before** any auth.
+
+Verify the deployed posture (no valid token needed — the preflight doesn't check
+it):
+
+```bash
+curl -i -X OPTIONS "https://<your-host>/upload/x" \
+  -H "Origin: null" -H "Access-Control-Request-Method: PUT"
+# Expect: 204 + Access-Control-Allow-Origin: *
+```
+
+If `Access-Control-Allow-Origin` is missing, the running process doesn't see the
+variable: confirm it is set **and forwarded into the container**
+(`docker compose exec cloudflare-pages-mcp printenv UPLOAD_ALLOWED_ORIGINS`),
+then restart. Behind a reverse proxy, ensure it forwards `OPTIONS` to the server
+rather than answering or stripping it.
+
 ## Endpoints
 
 - `POST /mcp` — Streamable HTTP MCP endpoint (use this URL in Claude).
 - `GET /health` — health check, returns `{ "status": "ok", "auth": "<mode>" }`.
+- `PUT /upload/:token` — direct file upload for staged deployments. The signed
+  `:token` (handed out by `create_upload_url`) is the authorization, so this
+  route is not behind the MCP auth. `OPTIONS` answers the CORS preflight when
+  `UPLOAD_ALLOWED_ORIGINS` is set.
 
 ## Requirements
 
@@ -96,26 +152,27 @@ PROJECT_NAME env vars — the upload needs nothing but the signed URL.
 
 All configuration is via environment variables.
 
-| Variable                  | Required | Default           | Description                                                                                                                                                                        |
-| ------------------------- | -------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`    | yes      | —                 | API token with Pages edit permission.                                                                                                                                              |
-| `CLOUDFLARE_ACCOUNT_ID`   | yes      | —                 | Account ID that owns the projects.                                                                                                                                                 |
-| `CLOUDFLARE_API_BASE_URL` | no       | public API        | Override the API base URL (testing).                                                                                                                                               |
-| `PORT`                    | no       | `3000`            | HTTP port to listen on.                                                                                                                                                            |
-| `HOST`                    | no       | `0.0.0.0`         | Interface to bind to.                                                                                                                                                              |
-| `PUBLIC_BASE_URL`         | no       | —                 | Public URL the server is reachable at (also the default OAuth issuer).                                                                                                             |
-| `MCP_AUTH_TOKEN`          | no       | —                 | If set, every `POST /mcp` must send `Authorization: Bearer <token>`.                                                                                                               |
-| `OAUTH_PASSWORD`          | no       | —                 | Enables the OAuth 2.1 server; the password users enter on the consent screen.                                                                                                      |
-| `OAUTH_ISSUER_URL`        | no       | `PUBLIC_BASE_URL` | Public https issuer URL for OAuth.                                                                                                                                                 |
-| `OAUTH_SIGNING_SECRET`    | no       | random            | HMAC secret for signing tokens. `openssl rand -hex 32`.                                                                                                                            |
-| `OAUTH_ACCESS_TOKEN_TTL`  | no       | `3600`            | Access-token lifetime (seconds).                                                                                                                                                   |
-| `OAUTH_REFRESH_TOKEN_TTL` | no       | `2592000`         | Refresh-token lifetime (seconds).                                                                                                                                                  |
-| `TRUST_PROXY`             | no       | `1`               | Express `trust proxy` (proxy hops, or `true`/`false`).                                                                                                                             |
-| `MAX_BODY_SIZE`           | no       | `25mb`            | Max accepted JSON request body size.                                                                                                                                               |
-| `RATE_LIMIT_WINDOW_MS`    | no       | `60000`           | Rate-limit window in ms.                                                                                                                                                           |
-| `RATE_LIMIT_MAX`          | no       | `60`              | Max requests per window per IP (`0` disables).                                                                                                                                     |
-| `ALLOWED_ORIGINS`         | no       | —                 | Comma-separated Origin allow-list for `/mcp`.                                                                                                                                      |
-| `UPLOAD_ALLOWED_ORIGINS`  | no       | —                 | CORS for the `/upload` and `/health` endpoints. Empty = off (curl only); `*` = any origin incl. opaque `Origin: null` (browser/sandbox uploads); or a comma-separated origin list. |
+| Variable                  | Required | Default                         | Description                                                                                                                                                                        |
+| ------------------------- | -------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`    | yes      | —                               | API token with Pages edit permission.                                                                                                                                              |
+| `CLOUDFLARE_ACCOUNT_ID`   | yes      | —                               | Account ID that owns the projects.                                                                                                                                                 |
+| `CLOUDFLARE_API_BASE_URL` | no       | public API                      | Override the API base URL (testing).                                                                                                                                               |
+| `PORT`                    | no       | `3000`                          | HTTP port to listen on.                                                                                                                                                            |
+| `HOST`                    | no       | `0.0.0.0`                       | Interface to bind to.                                                                                                                                                              |
+| `PUBLIC_BASE_URL`         | no       | —                               | Public URL the server is reachable at (also the default OAuth issuer).                                                                                                             |
+| `MCP_AUTH_TOKEN`          | no       | —                               | If set, every `POST /mcp` must send `Authorization: Bearer <token>`.                                                                                                               |
+| `OAUTH_PASSWORD`          | no       | —                               | Enables the OAuth 2.1 server; the password users enter on the consent screen.                                                                                                      |
+| `OAUTH_ISSUER_URL`        | no       | `PUBLIC_BASE_URL`               | Public https issuer URL for OAuth.                                                                                                                                                 |
+| `OAUTH_SIGNING_SECRET`    | no       | random                          | HMAC secret for signing tokens. `openssl rand -hex 32`.                                                                                                                            |
+| `OAUTH_ACCESS_TOKEN_TTL`  | no       | `3600`                          | Access-token lifetime (seconds).                                                                                                                                                   |
+| `OAUTH_REFRESH_TOKEN_TTL` | no       | `2592000`                       | Refresh-token lifetime (seconds).                                                                                                                                                  |
+| `TRUST_PROXY`             | no       | `1`                             | Express `trust proxy` (proxy hops, or `true`/`false`).                                                                                                                             |
+| `MAX_BODY_SIZE`           | no       | `25mb`                          | Max accepted JSON request body size.                                                                                                                                               |
+| `RATE_LIMIT_WINDOW_MS`    | no       | `60000`                         | Rate-limit window in ms.                                                                                                                                                           |
+| `RATE_LIMIT_MAX`          | no       | `60`                            | Max requests per window per IP (`0` disables).                                                                                                                                     |
+| `ALLOWED_ORIGINS`         | no       | —                               | Comma-separated Origin allow-list for `/mcp`.                                                                                                                                      |
+| `UPLOAD_SIGNING_SECRET`   | no       | `OAUTH_SIGNING_SECRET` / random | HMAC secret for signing direct-upload URLs. Set a stable value so upload URLs survive restarts / multiple instances.                                                               |
+| `UPLOAD_ALLOWED_ORIGINS`  | no       | —                               | CORS for the `/upload` and `/health` endpoints. Empty = off (curl only); `*` = any origin incl. opaque `Origin: null` (browser/sandbox uploads); or a comma-separated origin list. |
 
 Authentication modes are chosen automatically:
 
@@ -183,7 +240,11 @@ curl -s https://<your-host>/health
 - Always enable OAuth (or at least `MCP_AUTH_TOKEN`) when the server is exposed
   publicly — it holds your Cloudflare credentials.
 - Set a stable `OAUTH_SIGNING_SECRET` in production so issued tokens survive
-  restarts and are shared across instances.
+  restarts and are shared across instances. Likewise set `UPLOAD_SIGNING_SECRET`
+  so in-flight upload URLs survive restarts and work across instances.
+- Direct uploads are authorized solely by the short-lived signed token in the
+  URL (no cookies). Only enable `UPLOAD_ALLOWED_ORIGINS` (especially `*`) if you
+  want browser-based uploads; leave it unset for server-to-server-only setups.
 
 ## License
 
