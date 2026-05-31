@@ -5,8 +5,7 @@
 Please report security issues **privately** rather than via public issues.
 
 - Use GitHub's [private vulnerability reporting](https://github.com/perzeuss/cloudflare-pages-mcp/security/advisories/new)
-  ("Report a vulnerability" under the repository's **Security** tab), or
-- contact the maintainer directly at **[redacted]**.
+  ("Report a vulnerability" under the repository's **Security** tab).
 
 Please include steps to reproduce and the affected version/commit. You'll get
 an acknowledgement as soon as possible.
