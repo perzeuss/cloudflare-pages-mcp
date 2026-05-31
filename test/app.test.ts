@@ -44,6 +44,30 @@ test("GET /health returns ok and auth mode", async () => {
   assert.equal(res.body.auth, "open");
 });
 
+test("GET /health has no CORS header by default", async () => {
+  const { app } = makeApp();
+  const res = await request(app).get("/health").set("Origin", "null");
+  assert.equal(res.headers["access-control-allow-origin"], undefined);
+});
+
+test("GET /health carries CORS for an opaque origin when enabled", async () => {
+  const { app } = makeApp({ uploadAllowedOrigins: ["*"] });
+  const res = await request(app).get("/health").set("Origin", "null");
+  assert.equal(res.status, 200);
+  assert.equal(res.headers["access-control-allow-origin"], "*");
+});
+
+test("OPTIONS /health answers the preflight when CORS is enabled", async () => {
+  const { app } = makeApp({ uploadAllowedOrigins: ["*"] });
+  const res = await request(app)
+    .options("/health")
+    .set("Origin", "null")
+    .set("Access-Control-Request-Method", "GET");
+  assert.equal(res.status, 204);
+  assert.equal(res.headers["access-control-allow-origin"], "*");
+  assert.match(res.headers["access-control-allow-methods"], /GET/);
+});
+
 test("PUT /upload with a valid token stages the file", async () => {
   const { app, staging } = makeApp();
   const { id } = staging.create({
