@@ -64,6 +64,13 @@ export interface Config {
   rateLimitMax: number;
   /** Optional allow-list of request Origin headers for the MCP endpoint. */
   allowedOrigins?: string[];
+  /**
+   * Optional CORS allow-list for the direct-upload endpoint. Empty/undefined
+   * disables CORS (server-to-server `curl` only). `["*"]` allows any origin
+   * (safe: the signed token is the auth and no cookies are used). Otherwise,
+   * only the listed origins may upload from a browser.
+   */
+  uploadAllowedOrigins?: string[];
   /** Optional bearer token. If set, every MCP request must send it. */
   authToken?: string;
   /** HMAC secret used to sign short-lived direct-upload URLs. */
@@ -150,6 +157,10 @@ export function loadConfig(): Config {
     rateLimitMax: Number.parseInt(process.env.RATE_LIMIT_MAX || "60", 10),
     allowedOrigins: (() => {
       const list = parseList(process.env.ALLOWED_ORIGINS);
+      return list.length > 0 ? list : undefined;
+    })(),
+    uploadAllowedOrigins: (() => {
+      const list = parseList(process.env.UPLOAD_ALLOWED_ORIGINS);
       return list.length > 0 ? list : undefined;
     })(),
     authToken: process.env.MCP_AUTH_TOKEN?.trim() || undefined,

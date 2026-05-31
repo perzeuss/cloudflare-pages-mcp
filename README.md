@@ -96,25 +96,26 @@ PROJECT_NAME env vars — the upload needs nothing but the signed URL.
 
 All configuration is via environment variables.
 
-| Variable                  | Required | Default           | Description                                                                   |
-| ------------------------- | -------- | ----------------- | ----------------------------------------------------------------------------- |
-| `CLOUDFLARE_API_TOKEN`    | yes      | —                 | API token with Pages edit permission.                                         |
-| `CLOUDFLARE_ACCOUNT_ID`   | yes      | —                 | Account ID that owns the projects.                                            |
-| `CLOUDFLARE_API_BASE_URL` | no       | public API        | Override the API base URL (testing).                                          |
-| `PORT`                    | no       | `3000`            | HTTP port to listen on.                                                       |
-| `HOST`                    | no       | `0.0.0.0`         | Interface to bind to.                                                         |
-| `PUBLIC_BASE_URL`         | no       | —                 | Public URL the server is reachable at (also the default OAuth issuer).        |
-| `MCP_AUTH_TOKEN`          | no       | —                 | If set, every `POST /mcp` must send `Authorization: Bearer <token>`.          |
-| `OAUTH_PASSWORD`          | no       | —                 | Enables the OAuth 2.1 server; the password users enter on the consent screen. |
-| `OAUTH_ISSUER_URL`        | no       | `PUBLIC_BASE_URL` | Public https issuer URL for OAuth.                                            |
-| `OAUTH_SIGNING_SECRET`    | no       | random            | HMAC secret for signing tokens. `openssl rand -hex 32`.                       |
-| `OAUTH_ACCESS_TOKEN_TTL`  | no       | `3600`            | Access-token lifetime (seconds).                                              |
-| `OAUTH_REFRESH_TOKEN_TTL` | no       | `2592000`         | Refresh-token lifetime (seconds).                                             |
-| `TRUST_PROXY`             | no       | `1`               | Express `trust proxy` (proxy hops, or `true`/`false`).                        |
-| `MAX_BODY_SIZE`           | no       | `25mb`            | Max accepted JSON request body size.                                          |
-| `RATE_LIMIT_WINDOW_MS`    | no       | `60000`           | Rate-limit window in ms.                                                      |
-| `RATE_LIMIT_MAX`          | no       | `60`              | Max requests per window per IP (`0` disables).                                |
-| `ALLOWED_ORIGINS`         | no       | —                 | Comma-separated Origin allow-list for `/mcp`.                                 |
+| Variable                  | Required | Default           | Description                                                                                                                             |
+| ------------------------- | -------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`    | yes      | —                 | API token with Pages edit permission.                                                                                                   |
+| `CLOUDFLARE_ACCOUNT_ID`   | yes      | —                 | Account ID that owns the projects.                                                                                                      |
+| `CLOUDFLARE_API_BASE_URL` | no       | public API        | Override the API base URL (testing).                                                                                                    |
+| `PORT`                    | no       | `3000`            | HTTP port to listen on.                                                                                                                 |
+| `HOST`                    | no       | `0.0.0.0`         | Interface to bind to.                                                                                                                   |
+| `PUBLIC_BASE_URL`         | no       | —                 | Public URL the server is reachable at (also the default OAuth issuer).                                                                  |
+| `MCP_AUTH_TOKEN`          | no       | —                 | If set, every `POST /mcp` must send `Authorization: Bearer <token>`.                                                                    |
+| `OAUTH_PASSWORD`          | no       | —                 | Enables the OAuth 2.1 server; the password users enter on the consent screen.                                                           |
+| `OAUTH_ISSUER_URL`        | no       | `PUBLIC_BASE_URL` | Public https issuer URL for OAuth.                                                                                                      |
+| `OAUTH_SIGNING_SECRET`    | no       | random            | HMAC secret for signing tokens. `openssl rand -hex 32`.                                                                                 |
+| `OAUTH_ACCESS_TOKEN_TTL`  | no       | `3600`            | Access-token lifetime (seconds).                                                                                                        |
+| `OAUTH_REFRESH_TOKEN_TTL` | no       | `2592000`         | Refresh-token lifetime (seconds).                                                                                                       |
+| `TRUST_PROXY`             | no       | `1`               | Express `trust proxy` (proxy hops, or `true`/`false`).                                                                                  |
+| `MAX_BODY_SIZE`           | no       | `25mb`            | Max accepted JSON request body size.                                                                                                    |
+| `RATE_LIMIT_WINDOW_MS`    | no       | `60000`           | Rate-limit window in ms.                                                                                                                |
+| `RATE_LIMIT_MAX`          | no       | `60`              | Max requests per window per IP (`0` disables).                                                                                          |
+| `ALLOWED_ORIGINS`         | no       | —                 | Comma-separated Origin allow-list for `/mcp`.                                                                                           |
+| `UPLOAD_ALLOWED_ORIGINS`  | no       | —                 | CORS for the `/upload` endpoint. Empty = off (curl only); `*` = any origin (browser/sandbox uploads); or a comma-separated origin list. |
 
 Authentication modes are chosen automatically:
 
