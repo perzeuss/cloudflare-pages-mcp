@@ -11,34 +11,74 @@ registration) gated behind a single shared password.
 ## Tools
 
 - `create_project` — create a new Pages project (`<name>.pages.dev`).
-- `deploy` — upload a set of inline files and publish a deployment (single call).
-- `create_deployment` / `add_files` / `publish_deployment` — staged, chunked
-  deploy for large sites: open a deployment, append files across several small
-  calls, then publish them as one deployment (works around the per-call output
-  size limit).
-- `create_upload_url` — get a short-lived signed URL to upload a large **binary**
-  asset (image, video, font) into a staged deployment with an HTTP `PUT`, so its
-  bytes never pass through the model. An agent with a shell uploads the local
-  file directly, e.g. `curl -T ./hero.jpg "<upload_url>"`. Requires
-  `PUBLIC_BASE_URL` to be set.
-
-### Large sites and binary assets
-
-A remote connector receives every tool argument as model output, so text files
-go inline (`deploy` for small sites, `create_deployment` → `add_files` →
-`publish_deployment` for large ones). **Binary** assets are different: base64
-inline is wasteful and quickly exceeds the per-call limit. Instead:
-
-1. `create_deployment` → `deploy_id`
-2. (optionally) `add_files` for the HTML/CSS/JS
-3. `create_upload_url` with the `deploy_id` and target `path` → returns a signed
-   URL + a ready `curl -T` command; upload each image/video straight from disk
-4. `publish_deployment` → publishes everything as one deployment
-
-The upload bytes stream directly to the server and never go through the model.
+- `deploy` — upload a set of inline files and publish in a single call. Best for
+  a small, fully model-generated site that is **not** on disk.
+- `create_deployment` / `create_upload_url` / `publish_deployment` — staged
+  deploy for a site that lives on disk, includes binary assets, or is too large
+  for one `deploy` call. Open a deployment, get signed upload URLs for every file
+  (a batch of `paths` in one call), upload them straight from disk, then publish
+  everything as one deployment (see below). Requires `PUBLIC_BASE_URL`.
+- `add_files` — **deprecated**, no longer stages files. Passing file content
+  inline through the model is no longer supported for staged deployments; use
+  `create_upload_url` to upload from disk instead.
 - `list_projects` — list existing projects.
 - `get_project` — fetch one project's details.
 - `delete_project` — delete a project.
+
+### Deploying a site from disk (recommended)
+
+A remote connector receives every tool argument as model output, so pushing file
+content through tool calls wastes tokens and hits the per-call size limit —
+worst of all for binary assets. Instead, upload **every** file (HTML/CSS/JS and
+binary) directly from disk via short-lived signed URLs, so the bytes never pass
+through the model:
+
+1. `create_deployment` → returns a `deploy_id`.
+2. `create_upload_url` with the `deploy_id` and a batch of `paths` (every
+   site-relative path) → returns one signed `PUT` URL per file, plus a
+   ready-to-use TSV manifest.
+3. Upload each local file with an HTTP `PUT`. No Cloudflare credentials or env
+   vars are needed — the signed token in the URL **is** the authorization:
+
+   ```bash
+   curl -T ./dist/index.html "<upload-url>"
+   ```
+
+   The [`cloudflare-pages-upload` skill](skills/cloudflare-pages-upload) ships an
+   `upload.sh` helper that uploads a whole manifest at once.
+4. `publish_deployment` → publishes everything as one deployment and returns the
+   live URL.
+
+### Use it from an agent (copy-paste prompt)
+
+Paste this to an agent that has a shell and the `cloudflare-pages-mcp` connector
+connected. It installs the upload skill, then deploys your site from disk —
+without ever passing file contents through the model:
+
+```text
+Deploy the static site in ./dist to Cloudflare Pages using the
+cloudflare-pages-mcp connector.
+
+First install the upload skill into this project:
+
+  mkdir -p .claude/skills/cloudflare-pages-upload
+  curl -fsSL https://raw.githubusercontent.com/perzeuss/cloudflare-pages-mcp/main/skills/cloudflare-pages-upload/SKILL.md \
+    -o .claude/skills/cloudflare-pages-upload/SKILL.md
+  curl -fsSL https://raw.githubusercontent.com/perzeuss/cloudflare-pages-mcp/main/skills/cloudflare-pages-upload/upload.sh \
+    -o .claude/skills/cloudflare-pages-upload/upload.sh
+  chmod +x .claude/skills/cloudflare-pages-upload/upload.sh
+
+Then follow the skill exactly:
+  1. create_deployment to get a deploy_id.
+  2. create_upload_url with that deploy_id and a `paths` array of EVERY file in
+     ./dist (relative paths) to get one signed URL per file.
+  3. Upload all files from disk with the skill:
+       .claude/skills/cloudflare-pages-upload/upload.sh --manifest <file>
+  4. publish_deployment to go live.
+
+Do NOT pass file contents inline (no add_files), and do NOT set any CF_* /
+PROJECT_NAME env vars — the upload needs nothing but the signed URL.
+```
 
 ## Endpoints
 
@@ -126,7 +166,7 @@ For development with auto-reload, use `npm run dev`.
 3. Enter the MCP URL: `https://<your-host>/mcp`.
 4. Claude performs OAuth discovery and dynamic client registration, then opens
    the consent screen. Enter your `OAUTH_PASSWORD` to authorize.
-5. The five Cloudflare Pages tools become available in your conversations.
+5. The Cloudflare Pages tools become available in your conversations.
 
 You can confirm the server is healthy before connecting:
 
