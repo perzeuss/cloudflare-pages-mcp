@@ -46,6 +46,7 @@ through the model:
 
    The [`cloudflare-pages-upload` skill](skills/cloudflare-pages-upload) ships an
    `upload.sh` helper that uploads a whole manifest at once.
+
 4. `publish_deployment` → publishes everything as one deployment and returns the
    live URL.
 

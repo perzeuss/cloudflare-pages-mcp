@@ -23,7 +23,7 @@ bytes never pass through the model. This skill covers that workflow and ships an
 
 **`upload.sh` needs NOTHING but the signed upload URL.** It just does an HTTP
 `PUT` of your local file to the MCP server's `/upload/<token>` endpoint, and the
-signed token in that URL *is* the authorization.
+signed token in that URL _is_ the authorization.
 
 Do **NOT** set `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `PROJECT_NAME`, or any other
 environment variable to run the script — those are server-side settings the MCP

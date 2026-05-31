@@ -211,7 +211,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           "       -> returns one signed URL per file (and a ready-to-use manifest).",
           "  2. Upload every local file with the cloudflare-pages-upload skill:",
           "       skills/cloudflare-pages-upload/upload.sh --manifest <file>",
-          "     (or PUT each file individually: curl -T <local-file> \"<upload-url>\")",
+          '     (or PUT each file individually: curl -T <local-file> "<upload-url>")',
           "  3. publish_deployment { deploy_id } to go live.",
           "",
           "If the content is small and entirely model-generated (not on disk), call",

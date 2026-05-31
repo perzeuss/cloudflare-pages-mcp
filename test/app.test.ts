@@ -186,7 +186,11 @@ test("create_upload_url returns one signed URL per path in a single call", async
     ...baseConfig,
     publicBaseUrl: "https://mcp.test",
   });
-  const { id } = staging.create({ projectName: "p", createIfMissing: true, productionBranch: "main" });
+  const { id } = staging.create({
+    projectName: "p",
+    createIfMissing: true,
+    productionBranch: "main",
+  });
 
   const res = await client.callTool({
     name: "create_upload_url",
@@ -208,7 +212,11 @@ test("create_upload_url still accepts a single legacy path", async () => {
     ...baseConfig,
     publicBaseUrl: "https://mcp.test",
   });
-  const { id } = staging.create({ projectName: "p", createIfMissing: true, productionBranch: "main" });
+  const { id } = staging.create({
+    projectName: "p",
+    createIfMissing: true,
+    productionBranch: "main",
+  });
 
   const res = await client.callTool({
     name: "create_upload_url",
@@ -221,7 +229,11 @@ test("create_upload_url still accepts a single legacy path", async () => {
 
 test("add_files is deprecated: it stages nothing and points to the upload workflow", async () => {
   const { client, staging, close } = await connectMcp(baseConfig);
-  const { id } = staging.create({ projectName: "p", createIfMissing: true, productionBranch: "main" });
+  const { id } = staging.create({
+    projectName: "p",
+    createIfMissing: true,
+    productionBranch: "main",
+  });
 
   const res = await client.callTool({
     name: "add_files",
