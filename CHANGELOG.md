@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.2.0...v1.2.1) (2026-05-31)
+
+
+### Bug Fixes
+
+* **compose:** forward all supported env vars ([#12](https://github.com/perzeuss/cloudflare-pages-mcp/issues/12)) ([58216c5](https://github.com/perzeuss/cloudflare-pages-mcp/commit/58216c5c7153552cb419131fae3bc397c4ea0c15))
+
 # [1.2.0](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.1.0...v1.2.0) (2026-05-31)
 
 
