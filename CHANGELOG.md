@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.0.0...v1.1.0) (2026-05-31)
+
+
+### Features
+
+* opt-in CORS for the /upload endpoint (UPLOAD_ALLOWED_ORIGINS) ([#9](https://github.com/perzeuss/cloudflare-pages-mcp/issues/9)) ([9c104d4](https://github.com/perzeuss/cloudflare-pages-mcp/commit/9c104d4bb02c2bd40bf6166092e6c6bd589d064d))
+
 # 1.0.0 (2026-05-31)
 
 
