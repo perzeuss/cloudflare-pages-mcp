@@ -59,3 +59,6 @@ services:
       RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # CORS for /upload and /health. "*" enables browser/sandbox uploads
+      # (opaque Origin: null); empty = off (server-to-server curl only).
+      UPLOAD_ALLOWED_ORIGINS: ${UPLOAD_ALLOWED_ORIGINS:-}
