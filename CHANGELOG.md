@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.1.0...v1.2.0) (2026-05-31)
+
+
+### Features
+
+* extend opt-in CORS to /health and broaden allowed headers ([#11](https://github.com/perzeuss/cloudflare-pages-mcp/issues/11)) ([cbc8bfa](https://github.com/perzeuss/cloudflare-pages-mcp/commit/cbc8bfab56b6835d84d532b232726eff9a30dc5c))
+
 # [1.1.0](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.0.0...v1.1.0) (2026-05-31)
 
 
