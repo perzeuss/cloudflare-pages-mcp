@@ -11,7 +11,11 @@ registration) gated behind a single shared password.
 ## Tools
 
 - `create_project` — create a new Pages project (`<name>.pages.dev`).
-- `deploy` — upload a set of inline files and publish a deployment.
+- `deploy` — upload a set of inline files and publish a deployment (single call).
+- `create_deployment` / `add_files` / `publish_deployment` — staged, chunked
+  deploy for large sites: open a deployment, append files across several small
+  calls, then publish them as one deployment (works around the per-call output
+  size limit).
 - `list_projects` — list existing projects.
 - `get_project` — fetch one project's details.
 - `delete_project` — delete a project.

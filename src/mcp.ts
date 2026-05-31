@@ -11,11 +11,13 @@ import { z } from "zod";
 
 import type { Config } from "./config.js";
 import { CloudflareClient } from "./cloudflare.js";
-import { collectFiles } from "./files.js";
+import { collectFiles, inlineToDeployFile } from "./files.js";
+import { StagingStore } from "./staging.js";
 
 export interface ServerContext {
   config: Config;
   client: CloudflareClient;
+  staging: StagingStore;
 }
 
 const inlineFileSchema = z.object({
@@ -55,7 +57,7 @@ function liveUrls(project: { name: string; subdomain?: string }, deploymentUrl?:
 }
 
 export function buildMcpServer(ctx: ServerContext): McpServer {
-  const { client } = ctx;
+  const { client, staging } = ctx;
 
   const server = new McpServer({
     name: "cloudflare-pages-mcp",
@@ -88,7 +90,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     {
       annotations: { title: "Deploy files to Cloudflare Pages" },
       description:
-        "Upload files and create a deployment, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs.",
+        "Upload files and create a deployment in a single call, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs. NOTE: a single tool call is bounded by the model's output size — for large sites (many files or thousands of lines) use create_deployment + add_files + publish_deployment instead.",
       inputSchema: {
         project_name: z.string().describe("Target Pages project name."),
         files: z
@@ -130,6 +132,110 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
         return [
           `Deployed ${files.length} file(s) to "${args.project_name}" (${uploaded}/${total} assets newly uploaded).`,
           liveUrls({ name: args.project_name }, deployment.url),
+          `Deployment ID: ${deployment.id}`,
+        ].join("\n");
+      }),
+  );
+
+  server.registerTool(
+    "create_deployment",
+    {
+      annotations: { title: "Start a staged (chunked) deployment" },
+      description:
+        "Begin an incremental deployment for a large site. Returns a deploy_id. Append files with add_files (call it as many times as needed, in small batches that each fit in one tool call), then call publish_deployment to upload everything as ONE Cloudflare deployment. Use this instead of `deploy` when the site is too large to pass in a single call.",
+      inputSchema: {
+        project_name: z.string().describe("Target Pages project name."),
+        branch: z
+          .string()
+          .optional()
+          .describe(
+            "Deployment branch. Omit (or use the production branch) for a production deploy; any other value creates a preview deployment.",
+          ),
+        create_if_missing: z
+          .boolean()
+          .optional()
+          .describe("Create the project if it does not exist yet. Default: true."),
+        production_branch: z
+          .string()
+          .optional()
+          .describe('Production branch used when auto-creating the project. Default: "main".'),
+      },
+    },
+    async (args) =>
+      run(async () => {
+        const staged = staging.create({
+          projectName: args.project_name,
+          branch: args.branch,
+          createIfMissing: args.create_if_missing !== false,
+          productionBranch: args.production_branch ?? "main",
+        });
+        return [
+          `Started staged deployment for "${args.project_name}".`,
+          `deploy_id: ${staged.id}`,
+          "Add files with add_files (small batches), then call publish_deployment.",
+        ].join("\n");
+      }),
+  );
+
+  server.registerTool(
+    "add_files",
+    {
+      annotations: { title: "Add files to a staged deployment" },
+      description:
+        "Append a batch of files to a staged deployment created with create_deployment. Call repeatedly with small batches. Files with a path already staged are overwritten. Returns the running file count.",
+      inputSchema: {
+        deploy_id: z.string().describe("The deploy_id returned by create_deployment."),
+        files: z
+          .array(inlineFileSchema)
+          .min(1)
+          .describe("A batch of site files to stage (text, or base64 for binary assets)."),
+      },
+    },
+    async (args) =>
+      run(async () => {
+        const deployFiles = args.files.map(inlineToDeployFile);
+        const staged = staging.addFiles(args.deploy_id, deployFiles);
+        return [
+          `Added ${deployFiles.length} file(s) to staged deployment ${args.deploy_id}.`,
+          `Total staged: ${staged.files.size} file(s).`,
+          "Call add_files again for more, or publish_deployment to go live.",
+        ].join("\n");
+      }),
+  );
+
+  server.registerTool(
+    "publish_deployment",
+    {
+      annotations: { title: "Publish a staged deployment" },
+      description:
+        "Upload all files staged under deploy_id and publish them as a single Cloudflare Pages deployment. Auto-creates the project if needed (per create_deployment's setting). Consumes the staged deployment. Returns the live URLs.",
+      inputSchema: {
+        deploy_id: z.string().describe("The deploy_id returned by create_deployment."),
+      },
+    },
+    async (args) =>
+      run(async () => {
+        const staged = staging.get(args.deploy_id);
+        const files = [...staged.files.values()];
+        if (files.length === 0) {
+          throw new Error("No files staged. Add files with add_files before publishing.");
+        }
+
+        if (staged.createIfMissing && !(await client.projectExists(staged.projectName))) {
+          await client.createProject(staged.projectName, staged.productionBranch);
+        }
+
+        const { deployment, uploaded, total } = await client.deploy({
+          projectName: staged.projectName,
+          files,
+          branch: staged.branch,
+        });
+
+        staging.delete(args.deploy_id);
+
+        return [
+          `Published ${files.length} file(s) to "${staged.projectName}" (${uploaded}/${total} assets newly uploaded).`,
+          liveUrls({ name: staged.projectName }, deployment.url),
           `Deployment ID: ${deployment.id}`,
         ].join("\n");
       }),

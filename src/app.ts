@@ -18,6 +18,7 @@ import { CloudflareClient } from "./cloudflare.js";
 import { buildMcpServer } from "./mcp.js";
 import { StatelessOAuthProvider } from "./oauth.js";
 import { isOriginAllowed, safeStrEqual } from "./security.js";
+import { StagingStore } from "./staging.js";
 
 export type AuthMode = "oauth" | "token" | "open";
 
@@ -31,6 +32,8 @@ export interface CreatedApp {
  */
 export function createApp(config: Config): CreatedApp {
   const client = new CloudflareClient(config.accountId, config.apiToken);
+  // Shared across requests so chunked deployments persist between tool calls.
+  const staging = new StagingStore();
 
   const app = express();
   // Don't advertise the framework.
@@ -162,7 +165,7 @@ export function createApp(config: Config): CreatedApp {
   // Stateless Streamable HTTP MCP endpoint.
   app.post("/mcp", ...mcpGuards, async (req: Request, res: Response) => {
     try {
-      const server = buildMcpServer({ config, client });
+      const server = buildMcpServer({ config, client, staging });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });

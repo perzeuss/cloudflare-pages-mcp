@@ -15,6 +15,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createApp } from "../src/app.ts";
 import { buildMcpServer } from "../src/mcp.ts";
 import { CloudflareClient } from "../src/cloudflare.ts";
+import { StagingStore } from "../src/staging.ts";
 import type { Config } from "../src/config.ts";
 
 const baseConfig: Config = {
@@ -84,7 +85,7 @@ test("OAuth discovery endpoint responds when OAuth is configured", async () => {
   assert.deepEqual(res.body.code_challenge_methods_supported, ["S256"]);
 });
 
-test("buildMcpServer registers the five Cloudflare Pages tools", async () => {
+test("buildMcpServer registers the Cloudflare Pages tools", async () => {
   // Drive the MCP server over an in-memory transport pair so we exercise the
   // real protocol (initialize + tools/list) without an HTTP session, and
   // without ever reaching the Cloudflare API.
@@ -92,6 +93,7 @@ test("buildMcpServer registers the five Cloudflare Pages tools", async () => {
   const server = buildMcpServer({
     config: baseConfig,
     client: new CloudflareClient(baseConfig.accountId, baseConfig.apiToken),
+    staging: new StagingStore(),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
@@ -99,11 +101,14 @@ test("buildMcpServer registers the five Cloudflare Pages tools", async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
+    "add_files",
+    "create_deployment",
     "create_project",
     "delete_project",
     "deploy",
     "get_project",
     "list_projects",
+    "publish_deployment",
   ]);
 
   await client.close();

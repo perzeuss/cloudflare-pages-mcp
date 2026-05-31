@@ -24,6 +24,18 @@ export function normalizePath(input: string): string {
   return "/" + cleaned;
 }
 
+/** Convert a single inline file into a normalized, size-validated DeployFile. */
+export function inlineToDeployFile(file: InlineFile): DeployFile {
+  const path = normalizePath(file.path);
+  const contents = Buffer.from(file.content, file.encoding ?? "utf8");
+  if (contents.byteLength > MAX_FILE_SIZE) {
+    throw new Error(
+      `File ${path} is ${contents.byteLength} bytes, exceeding the 25 MiB per-file limit.`,
+    );
+  }
+  return { path, contents };
+}
+
 /**
  * Collects the files to deploy from inline definitions.
  *
@@ -39,8 +51,8 @@ export async function collectFiles(opts: { files?: InlineFile[] }): Promise<Depl
   const byPath = new Map<string, DeployFile>();
 
   for (const file of opts.files ?? []) {
-    const contents = Buffer.from(file.content, file.encoding ?? "utf8");
-    byPath.set(normalizePath(file.path), { path: normalizePath(file.path), contents });
+    const deployFile = inlineToDeployFile(file);
+    byPath.set(deployFile.path, deployFile);
   }
 
   const result = [...byPath.values()];
