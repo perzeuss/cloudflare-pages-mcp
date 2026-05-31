@@ -159,3 +159,80 @@ test("buildMcpServer registers the Cloudflare Pages tools", async () => {
   await client.close();
   await server.close();
 });
+
+async function connectMcp(config: Config) {
+  const client = new Client({ name: "test", version: "1.0" });
+  const staging = new StagingStore();
+  const server = buildMcpServer({
+    config,
+    client: new CloudflareClient(config.accountId, config.apiToken),
+    staging,
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+  const close = async () => {
+    await client.close();
+    await server.close();
+  };
+  return { client, staging, close };
+}
+
+function toolText(res: Awaited<ReturnType<Client["callTool"]>>): string {
+  return (res.content as { type: string; text: string }[]).map((c) => c.text).join("\n");
+}
+
+test("create_upload_url returns one signed URL per path in a single call", async () => {
+  const { client, staging, close } = await connectMcp({
+    ...baseConfig,
+    publicBaseUrl: "https://mcp.test",
+  });
+  const { id } = staging.create({ projectName: "p", createIfMissing: true, productionBranch: "main" });
+
+  const res = await client.callTool({
+    name: "create_upload_url",
+    arguments: { deploy_id: id, paths: ["index.html", "assets/hero.jpg"] },
+  });
+  const text = toolText(res);
+
+  // One manifest line (site-path <TAB> url) per requested path.
+  assert.match(text, /\/index\.html\thttps:\/\/mcp\.test\/upload\//);
+  assert.match(text, /\/assets\/hero\.jpg\thttps:\/\/mcp\.test\/upload\//);
+  const urlCount = (text.match(/https:\/\/mcp\.test\/upload\//g) || []).length;
+  assert.ok(urlCount >= 2, `expected >=2 upload URLs, got ${urlCount}`);
+
+  await close();
+});
+
+test("create_upload_url still accepts a single legacy path", async () => {
+  const { client, staging, close } = await connectMcp({
+    ...baseConfig,
+    publicBaseUrl: "https://mcp.test",
+  });
+  const { id } = staging.create({ projectName: "p", createIfMissing: true, productionBranch: "main" });
+
+  const res = await client.callTool({
+    name: "create_upload_url",
+    arguments: { deploy_id: id, path: "logo.png" },
+  });
+  assert.match(toolText(res), /\/logo\.png\thttps:\/\/mcp\.test\/upload\//);
+
+  await close();
+});
+
+test("add_files is deprecated: it stages nothing and points to the upload workflow", async () => {
+  const { client, staging, close } = await connectMcp(baseConfig);
+  const { id } = staging.create({ projectName: "p", createIfMissing: true, productionBranch: "main" });
+
+  const res = await client.callTool({
+    name: "add_files",
+    arguments: { deploy_id: id, files: [{ path: "index.html", content: "<h1>hi</h1>" }] },
+  });
+  const text = toolText(res);
+
+  assert.match(text, /DEPRECATED/);
+  assert.match(text, /create_upload_url/);
+  // Nothing was staged.
+  assert.equal(staging.get(id).files.size, 0);
+
+  await close();
+});

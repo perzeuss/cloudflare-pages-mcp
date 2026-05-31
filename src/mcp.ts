@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import type { Config } from "./config.js";
 import { CloudflareClient } from "./cloudflare.js";
-import { collectFiles, inlineToDeployFile, normalizePath } from "./files.js";
+import { collectFiles, normalizePath } from "./files.js";
 import { signToken } from "./security.js";
 import { StagingStore } from "./staging.js";
 
@@ -94,7 +94,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     {
       annotations: { title: "Deploy files to Cloudflare Pages" },
       description:
-        "Upload files and create a deployment in a single call, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs. NOTE: a single tool call is bounded by the model's output size — for large sites (many files or thousands of lines) use create_deployment + add_files + publish_deployment instead.",
+        "Upload files and create a deployment in a single call, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs. NOTE: a single tool call is bounded by the model's output size — for large sites (many files or thousands of lines) use create_deployment + create_upload_url + publish_deployment instead.",
       inputSchema: {
         project_name: z.string().describe("Target Pages project name."),
         files: z
@@ -146,7 +146,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     {
       annotations: { title: "Start a staged (chunked) deployment" },
       description:
-        "Begin an incremental deployment for a large site. Returns a deploy_id. Append files with add_files (call it as many times as needed, in small batches that each fit in one tool call), then call publish_deployment to upload everything as ONE Cloudflare deployment. Use this instead of `deploy` when the site is too large to pass in a single call.",
+        "Begin an incremental deployment for a large site. Returns a deploy_id. Add files by uploading them from disk: call create_upload_url with a batch of `paths` to get signed URLs, upload every file with the cloudflare-pages-upload skill (or curl), then call publish_deployment to upload everything as ONE Cloudflare deployment. Use this instead of `deploy` when the site is too large to pass in a single call or includes binary assets.",
       inputSchema: {
         project_name: z.string().describe("Target Pages project name."),
         branch: z
@@ -176,7 +176,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
         return [
           `Started staged deployment for "${args.project_name}".`,
           `deploy_id: ${staged.id}`,
-          "Add files with add_files (small batches), then call publish_deployment.",
+          "Get upload URLs with create_upload_url (batch `paths`), upload files from disk, then call publish_deployment.",
         ].join("\n");
       }),
   );
@@ -184,25 +184,40 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
   server.registerTool(
     "add_files",
     {
-      annotations: { title: "Add files to a staged deployment" },
+      annotations: { title: "DEPRECATED — use create_upload_url + the skill" },
       description:
-        "Append a batch of files to a staged deployment created with create_deployment. Call repeatedly with small batches. Files with a path already staged are overwritten. Returns the running file count.",
+        "DEPRECATED: do not use. Passing file content inline through the model is no longer supported for staged deployments — it wastes tokens and hits the output-size limit. This tool no longer stages anything; it returns instructions for the supported workflow. Instead use create_upload_url (batch `paths`) to get signed URLs and upload every file from disk via the cloudflare-pages-upload skill, then publish_deployment. For a small, fully model-generated site that is not on disk, use `deploy` (inline) instead.",
       inputSchema: {
-        deploy_id: z.string().describe("The deploy_id returned by create_deployment."),
+        deploy_id: z
+          .string()
+          .optional()
+          .describe("The deploy_id returned by create_deployment (ignored; tool is deprecated)."),
         files: z
           .array(inlineFileSchema)
-          .min(1)
-          .describe("A batch of site files to stage (text, or base64 for binary assets)."),
+          .optional()
+          .describe("Ignored — add_files no longer stages files."),
       },
     },
     async (args) =>
       run(async () => {
-        const deployFiles = args.files.map(inlineToDeployFile);
-        const staged = staging.addFiles(args.deploy_id, deployFiles);
+        const did = args.deploy_id ?? "<deploy_id>";
         return [
-          `Added ${deployFiles.length} file(s) to staged deployment ${args.deploy_id}.`,
-          `Total staged: ${staged.files.size} file(s).`,
-          "Call add_files again for more, or publish_deployment to go live.",
+          "add_files is DEPRECATED and did NOT stage anything.",
+          "",
+          "Add files to a staged deployment by uploading them from disk instead — this",
+          "keeps file bytes out of the model:",
+          "",
+          `  1. create_upload_url { deploy_id: "${did}", paths: ["index.html", "assets/hero.jpg", ...] }`,
+          "       -> returns one signed URL per file (and a ready-to-use manifest).",
+          "  2. Upload every local file with the cloudflare-pages-upload skill:",
+          "       skills/cloudflare-pages-upload/upload.sh --manifest <file>",
+          "     (or PUT each file individually: curl -T <local-file> \"<upload-url>\")",
+          "  3. publish_deployment { deploy_id } to go live.",
+          "",
+          "If the content is small and entirely model-generated (not on disk), call",
+          "`deploy` with inline `files` instead of using a staged deployment.",
+          "",
+          "See the cloudflare-pages-upload skill (SKILL.md) for the full workflow.",
         ].join("\n");
       }),
   );
@@ -210,19 +225,27 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
   server.registerTool(
     "create_upload_url",
     {
-      annotations: { title: "Get an upload URL for a large binary asset" },
+      annotations: { title: "Get signed upload URLs for staged files" },
       description:
-        'Get a short-lived, signed URL to upload a single large binary file (image, video, font, …) into a staged deployment WITHOUT passing its bytes through the model. Returns a URL and a ready-to-run curl command; upload the local file with an HTTP PUT (the raw file as the body), e.g. `curl -T ./photo.jpg "<upload_url>"`. The file is added to the staged deployment under `path`. Requires a deploy_id from create_deployment and that the server has PUBLIC_BASE_URL configured.',
+        'Get short-lived, signed URLs to upload files into a staged deployment directly from disk WITHOUT passing their bytes through the model. This is the primary way to add files to a staged deployment (text AND binary). Pass `paths` (a batch of site-relative paths) to get one URL per file in a single call. Returns a ready-to-run manifest for the cloudflare-pages-upload skill plus per-file curl commands; upload each local file with an HTTP PUT (the raw file as the body), e.g. `curl -T ./photo.jpg "<upload_url>"`. Requires a deploy_id from create_deployment and that the server has PUBLIC_BASE_URL configured.',
       inputSchema: {
         deploy_id: z.string().describe("The deploy_id returned by create_deployment."),
+        paths: z
+          .array(z.string())
+          .min(1)
+          .optional()
+          .describe(
+            'Site-relative paths to upload, e.g. ["index.html", "assets/hero.jpg"]. Returns one signed URL per path.',
+          ),
         path: z
           .string()
-          .describe('Site-relative path the uploaded file will live at, e.g. "assets/hero.jpg".'),
+          .optional()
+          .describe("Single site-relative path (legacy). Prefer `paths` for batches."),
       },
     },
     async (args) =>
       run(async () => {
-        // Validate the staged deployment exists before handing out a URL.
+        // Validate the staged deployment exists before handing out URLs.
         staging.get(args.deploy_id);
 
         const base = config.publicBaseUrl;
@@ -232,22 +255,42 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           );
         }
 
-        const path = normalizePath(args.path);
-        const token = signToken(
-          { t: "upload", did: args.deploy_id, p: path },
-          config.uploadSigningSecret,
-          UPLOAD_URL_TTL_SECONDS,
-        );
-        const uploadUrl = new URL(`/upload/${token}`, base).href;
+        const requested = args.paths ?? (args.path ? [args.path] : []);
+        if (requested.length === 0) {
+          throw new Error("Provide `paths` (a batch of site-relative paths) or a single `path`.");
+        }
+
+        const entries = requested.map((p) => {
+          const path = normalizePath(p);
+          const token = signToken(
+            { t: "upload", did: args.deploy_id, p: path },
+            config.uploadSigningSecret,
+            UPLOAD_URL_TTL_SECONDS,
+          );
+          const url = new URL(`/upload/${token}`, base).href;
+          return { path, url };
+        });
+
+        const ttlMin = Math.round(UPLOAD_URL_TTL_SECONDS / 60);
+        const manifest = entries.map((e) => `${e.path}\t${e.url}`).join("\n");
+        const curls = entries.map((e) => `  curl -T "${e.path}" "${e.url}"`).join("\n");
 
         return [
-          `Upload URL for "${path}" (valid ~${Math.round(UPLOAD_URL_TTL_SECONDS / 60)} min):`,
-          uploadUrl,
+          `Signed upload URLs for ${entries.length} file(s) in staged deployment ${args.deploy_id} (valid ~${ttlMin} min each).`,
           "",
-          "Upload the local file with an HTTP PUT, for example:",
-          `  curl -T <local-file> "${uploadUrl}"`,
+          "Upload every file from disk, then call publish_deployment.",
           "",
-          "The file is added to the staged deployment; call publish_deployment when done.",
+          "Recommended: save the manifest below (TSV: site-path <TAB> upload-url) to a",
+          "file — replace the left column with the local file path where it differs —",
+          "then run the cloudflare-pages-upload skill:",
+          "  skills/cloudflare-pages-upload/upload.sh --manifest <file>",
+          "",
+          "--- manifest ---",
+          manifest,
+          "--- end manifest ---",
+          "",
+          "Or upload each file individually:",
+          curls,
         ].join("\n");
       }),
   );
@@ -267,7 +310,9 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
         const staged = staging.get(args.deploy_id);
         const files = [...staged.files.values()];
         if (files.length === 0) {
-          throw new Error("No files staged. Add files with add_files before publishing.");
+          throw new Error(
+            "No files staged. Upload files from disk with create_upload_url before publishing.",
+          );
         }
 
         if (staged.createIfMissing && !(await client.projectExists(staged.projectName))) {

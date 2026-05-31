@@ -8,6 +8,10 @@
 # asks the server for a short-lived signed URL and uploads the file directly
 # from disk with an HTTP PUT — the bytes never pass through the model.
 #
+# No credentials or environment variables are required: the signed token inside
+# the upload URL is the authorization. Do NOT set CF_API_TOKEN / CF_ACCOUNT_ID /
+# PROJECT_NAME — those are server-side settings, not needed by this script.
+#
 # Usage:
 #   # Single file:
 #   upload.sh <local-file> <upload-url>
