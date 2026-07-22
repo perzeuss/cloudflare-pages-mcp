@@ -44,6 +44,17 @@ test("GET /health returns ok and auth mode", async () => {
   assert.equal(res.body.auth, "open");
 });
 
+test("CSP is enforced but does not restrict form-action (OAuth consent must post and redirect)", async () => {
+  const { app } = makeApp();
+  const res = await request(app).get("/health");
+  const csp = res.headers["content-security-policy"];
+  assert.ok(csp, "a CSP header is present (not disabled)");
+  assert.match(csp, /default-src 'none'/);
+  // form-action must be absent so the OAuth consent form can POST to /authorize
+  // and then redirect to the client's cross-origin redirect_uri.
+  assert.doesNotMatch(csp, /form-action/);
+});
+
 test("GET /health has no CORS header by default", async () => {
   const { app } = makeApp();
   const res = await request(app).get("/health").set("Origin", "null");

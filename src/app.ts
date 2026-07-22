@@ -46,9 +46,13 @@ export function createApp(config: Config): CreatedApp {
   app.set("trust proxy", config.trustProxy);
 
   // Security headers. Responses must remain reachable cross-origin (Claude
-  // connector traffic). A strict CSP still applies — the only HTML surface is
-  // the OAuth consent page, which uses an inline <style> block and posts back
-  // to this same origin.
+  // connector traffic). A strict CSP still applies (default-src 'none'), but we
+  // intentionally do NOT set `form-action`: the OAuth consent page posts to
+  // /authorize and then redirects to the client's (cross-origin) redirect_uri.
+  // `form-action` is a navigation directive that does not fall back to
+  // default-src, so omitting it leaves form targets unrestricted (required for
+  // the OAuth flow) without loosening any fetch restriction. A real policy
+  // (rather than `contentSecurityPolicy: false`) still satisfies scanners.
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -56,7 +60,6 @@ export function createApp(config: Config): CreatedApp {
         directives: {
           defaultSrc: ["'none'"],
           styleSrc: ["'unsafe-inline'"],
-          formAction: ["'self'"],
           baseUri: ["'none'"],
           frameAncestors: ["'none'"],
         },
