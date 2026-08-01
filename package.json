@@ -49,10 +49,10 @@
     "release": "semantic-release"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "blake3-wasm": "2.1.5",
     "express": "^5.1.0",
-    "express-rate-limit": "^8.6.0",
+    "express-rate-limit": "^8.6.1",
     "helmet": "^8.3.0",
     "zod": "3.25.76"
   },
@@ -61,7 +61,7 @@
     "@semantic-release/changelog": "6.0.3",
     "@semantic-release/git": "10.0.1",
     "@types/express": "^5.0.0",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "@types/supertest": "^7.2.1",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "10.1.8",
