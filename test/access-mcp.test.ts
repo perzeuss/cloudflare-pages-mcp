@@ -198,3 +198,30 @@ test("create_project uses the default protection before returning", async () => 
     await c.close();
   }
 });
+
+test("read_page returns content through MCP without changing Access applications or revealing credentials", async () => {
+  const credentials = { clientId: "reader.access", clientSecret: "reader-secret" };
+  const c = await connect({ ...base, accessServiceToken: credentials });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url, init) => {
+    assert.equal(
+      new Headers(init?.headers).get("CF-Access-Client-Secret"),
+      credentials.clientSecret,
+    );
+    return new Response("<h1>Private page</h1>", { headers: { "Content-Type": "text/html" } });
+  }) as typeof fetch;
+  try {
+    const result = await c.client.callTool({
+      name: "read_page",
+      arguments: { project_name: "site", path: "/" },
+    });
+    assert.ok(!result.isError, text(result));
+    assert.match(text(result), /Private page/);
+    assert.ok(!text(result).includes(credentials.clientSecret));
+    assert.deepEqual(c.cf.calls, []);
+    assert.deepEqual(c.cf.apps, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await c.close();
+  }
+});

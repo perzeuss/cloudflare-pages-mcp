@@ -9,6 +9,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+import { readProjectPage } from "./read-page.js";
 import { resolveAccessPolicy } from "./access-policies.js";
 import { ensureProjectAccess } from "./access.js";
 
@@ -408,6 +409,26 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           .map((p) => `- ${p.name} → https://${p.subdomain || `${p.name}.pages.dev`}`)
           .join("\n");
       }),
+  );
+
+  server.registerTool(
+    "read_page",
+    {
+      annotations: { title: "Read a published Pages page", readOnlyHint: true },
+      description:
+        "Read text content from an existing project's production pages.dev URL. Uses optional server-side Access service-token credentials; never changes access policies. No external URLs, redirects or binary downloads. Maximum 1 MiB; 20-second timeout.",
+      inputSchema: {
+        project_name: z
+          .string()
+          .min(1)
+          .describe("Existing Pages project name in this Cloudflare account."),
+        path: z.string().optional().describe("Site-relative path, e.g. / or /test/. Default: /."),
+      },
+    },
+    async (args) =>
+      run(async () =>
+        JSON.stringify(await readProjectPage(client, config, args.project_name, args.path ?? "/")),
+      ),
   );
 
   server.registerTool(

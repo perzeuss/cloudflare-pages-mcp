@@ -22,6 +22,8 @@ registration) gated behind a single shared password.
 ## Tools
 
 - `create_project` — create a new Pages project (`<name>.pages.dev`).
+- `read_page` — read text from an existing project's production URL, optionally
+  using server-side Access service-token credentials.
 - `deploy` — upload a set of inline files and publish in a single call. Best for
   a small, fully model-generated site that is **not** on disk.
 - `create_deployment` / `create_upload_url` / `publish_deployment` — staged
@@ -186,7 +188,14 @@ Configure login providers and reusable **Allow** policies in Cloudflare Zero Tru
 The server only stores names and policy IDs; it does not create login rules or
 handle visitor passwords or identity-provider secrets.
 
-Create a JSON or YAML file containing a name-to-ID mapping:
+Copy [access-policies.example.yaml](access-policies.example.yaml) to
+`access-policies.yaml`, or [access-policies.example.json](access-policies.example.json)
+to `access-policies.json`. Replace the example UUID with an existing reusable
+Allow policy ID from your Cloudflare account. The names are freely chosen lookup
+names. Keep `DEFAULT_ACCESS_POLICY_ID` in the environment; a catalog key named
+`default` does not set it.
+
+Both formats contain the same name-to-ID mapping:
 
 ```yaml
 private_pages: f174e90a-fafe-4643-bbbc-4a0ed4fc8415
@@ -244,7 +253,11 @@ full-host self-hosted Access applications for the actual project subdomain,
 reported by Pages. Each application references the existing policy by ID.
 
 Before any assets are uploaded to Cloudflare, the server reads back the Access
-applications. Conflicting policies, path-specific applications, overlapping
+applications. The selected Allow policy must remain present. Additional existing
+policies are accepted only when they are reusable **Service Auth** policies;
+the server reads and validates their IDs and actions without changing them.
+Additional Allow policies and Bypass policies remain unsupported. Conflicting
+policies, path-specific applications, overlapping
 hostnames, public path overrides, preflight bypasses and API errors abort the
 upload. Existing applications with incompatible configuration are **not**
 overwritten; resolve the conflict in Cloudflare and retry. A partially failed
@@ -264,6 +277,85 @@ the hostname-based Access rules.
 References: [reusable policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/policy-management/),
 [Access application API](https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/create/),
 [Pages production and preview protection](https://developers.cloudflare.com/pages/platform/known-issues/#enable-access-on-your-pagesdev-domain).
+
+### Policy files with Dokploy Compose
+
+Create a File Mount in Dokploy with File Path `policies.yaml` and your YAML
+catalog as Content. In the existing service definition, add:
+
+```yaml
+environment:
+  ACCESS_POLICIES_FILE: /config/policies.yaml
+volumes:
+  - ../files/policies.yaml:/config/policies.yaml:ro
+```
+
+Merge these entries into the existing `environment` and `volumes` sections.
+With Compose, the mount target is set in the Compose file; the File Mount UI
+may not expose an editable Mount Path. Redeploy after saving both changes.
+The ENV path must match the container target, including the filename.
+`DEFAULT_ACCESS_POLICY_ID` remains a separate ENV setting; a catalog entry
+named `default` is an ordinary lookup name.
+
+### Reading protected pages
+
+`read_page` performs a GET of a project's canonical production `pages.dev` URL:
+
+```json
+{ "project_name": "my-site", "path": "/test/" }
+```
+
+The project must exist in the configured Cloudflare account. Arbitrary URLs,
+custom domains, deployment URLs, custom request headers and non-GET methods are
+not accepted. Redirects are not followed, so `/test/` may work where `/test`
+redirects. Results contain text only (maximum 1 MiB, 20-second timeout), not a
+rendered page or the full original source project. Returned page content is
+untrusted data. A separate browser tool is not automatically authenticated.
+
+For protected pages, keep the existing user-login policy and configure an
+additional **Service Auth** policy in Cloudflare that allows a specific service
+token. Existing Service Auth policies can be reused. The MCP does not create,
+attach, edit or remove machine-access policies. Set both credentials on the
+server, using environment variables or your host's secret injection:
+
+```dotenv
+ACCESS_SERVICE_TOKEN_CLIENT_ID=<service-token-client-id>
+ACCESS_SERVICE_TOKEN_CLIENT_SECRET=<service-token-client-secret>
+```
+
+These are Access **service-token** credentials, not Google OAuth credentials or
+the Cloudflare management API token. They are never tool arguments or returned
+as credentials. The read request sends `CF-Access-Client-Id` and
+`CF-Access-Client-Secret` only to the project's canonical production hostname.
+Without credentials, public pages can still be read; protected requests fail
+normally. Incomplete credential pairs stop startup. Machine credentials also require an
+authenticated MCP endpoint (`MCP_AUTH_TOKEN` or the existing OAuth login configured
+with `OAUTH_PASSWORD`); an open endpoint is rejected. Existing policy file and
+`DEFAULT_ACCESS_POLICY_ID` settings remain unchanged.
+
+All authenticated callers of this MCP share the configured machine credential's
+read access. Use a dedicated token restricted to the intended applications and
+set its expiration in Cloudflare. Access service tokens are not inherently
+read-only; `read_page` limits its requests to GET, while the Cloudflare policy
+and target application define the token's actual permissions. No OAuth consent
+website or user-session delegation is involved.
+
+For a reusable Service Auth policy, Cloudflare's API accepts the following JSON
+via `POST /accounts/{account_id}/access/policies`:
+
+```json
+{
+  "name": "Pages MCP reader",
+  "decision": "non_identity",
+  "include": [{ "service_token": { "token_id": "<service-token-uuid>" } }]
+}
+```
+
+The `token_id` is the service token's resource UUID, not its client ID or secret.
+Attach the resulting policy to the relevant Access applications in Cloudflare,
+including production, previews and custom domains as needed. Do not use Bypass.
+See [Cloudflare service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
+and [Service Auth policy setup](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/common-policies/#authenticate-a-service-using-a-service-token).
 
 ## Quickstart (Docker)
 

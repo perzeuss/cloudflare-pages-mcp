@@ -135,3 +135,51 @@ test("readOAuthConfig throws when issuer URL is missing", () => {
     },
   );
 });
+
+test("loadConfig accepts complete Access service-token credentials and rejects incomplete pairs", () => {
+  withEnv(
+    {
+      ...creds,
+      MCP_AUTH_TOKEN: "mcp-test-token",
+      ACCESS_SERVICE_TOKEN_CLIENT_ID: "reader.access",
+      ACCESS_SERVICE_TOKEN_CLIENT_SECRET: "secret",
+    },
+    () => {
+      assert.deepEqual(loadConfig().accessServiceToken, {
+        clientId: "reader.access",
+        clientSecret: "secret",
+      });
+    },
+  );
+  for (const [clientId, clientSecret] of [
+    ["reader.access", undefined],
+    [undefined, "secret"],
+    ["reader.access", "bad\r\nvalue"],
+  ]) {
+    withEnv(
+      {
+        ...creds,
+        ACCESS_SERVICE_TOKEN_CLIENT_ID: clientId,
+        ACCESS_SERVICE_TOKEN_CLIENT_SECRET: clientSecret,
+      },
+      () => {
+        assert.throws(() => loadConfig(), /both ACCESS_SERVICE_TOKEN|printable ASCII/);
+      },
+    );
+  }
+});
+
+test("service-token reads cannot be exposed on an unauthenticated MCP endpoint", () => {
+  withEnv(
+    {
+      ...creds,
+      MCP_AUTH_TOKEN: undefined,
+      OAUTH_PASSWORD: undefined,
+      ACCESS_SERVICE_TOKEN_CLIENT_ID: "reader.access",
+      ACCESS_SERVICE_TOKEN_CLIENT_SECRET: "secret",
+    },
+    () => {
+      assert.throws(() => loadConfig(), /protect the MCP endpoint/);
+    },
+  );
+});

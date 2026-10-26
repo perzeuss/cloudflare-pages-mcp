@@ -32,15 +32,20 @@ function overlaps(a: string, b: string): boolean {
   return matches(hostA, hostB) || matches(hostB, hostA);
 }
 
-function verify(app: AccessApplication, hostname: string, policyId: string): void {
+async function verify(
+  client: CloudflareClient,
+  app: AccessApplication,
+  hostname: string,
+  policyId: string,
+): Promise<void> {
   const hosts = destinations(app);
   const policies = app.policies?.map((p) => (typeof p === "string" ? p : p.id));
   if (
     app.type !== "self_hosted" ||
     hosts.length !== 1 ||
     hosts[0] !== hostname ||
-    policies?.length !== 1 ||
-    policies[0] !== policyId ||
+    !policies?.includes(policyId) ||
+    new Set(policies).size !== policies?.length ||
     app.options_preflight_bypass ||
     app.destinations?.some(
       (d) => (d.type !== undefined && d.type !== "public") || d.overrides?.length,
@@ -49,6 +54,20 @@ function verify(app: AccessApplication, hostname: string, policyId: string): voi
     throw new Error(
       `Access configuration for ${hostname} does not exclusively enforce the selected policy. Configure it in Cloudflare before retrying.`,
     );
+  }
+  // Additional machine-access rules are operator-owned. Accept only reusable
+  // Service Auth policies; never add, update or remove them here.
+  for (const id of policies ?? []) {
+    if (id === policyId) continue;
+    if (!id) throw new Error(`Invalid additional Access policy for ${hostname}.`);
+    const extra = await client.accessRequest<{ id: string; decision: string; reusable?: boolean }>(
+      `/policies/${encodeURIComponent(id)}`,
+    );
+    if (extra.id !== id || extra.decision !== "non_identity" || extra.reusable !== true) {
+      throw new Error(
+        `Access configuration for ${hostname} does not exclusively allow the selected policy and reusable Service Auth policies.`,
+      );
+    }
   }
 }
 
@@ -95,7 +114,7 @@ export async function ensureProjectAccess(
       const detail = await client.accessRequest<AccessApplication>(
         `/apps/${encodeURIComponent(exact[0]!.id)}`,
       );
-      verify(detail, hostname, policyId);
+      await verify(client, detail, hostname, policyId);
       continue;
     }
     const created = await client.accessRequest<AccessApplication>("/apps", {
@@ -113,7 +132,7 @@ export async function ensureProjectAccess(
     const detail = await client.accessRequest<AccessApplication>(
       `/apps/${encodeURIComponent(created.id)}`,
     );
-    verify(detail, hostname, policyId);
+    await verify(client, detail, hostname, policyId);
   }
   return hosts;
 }

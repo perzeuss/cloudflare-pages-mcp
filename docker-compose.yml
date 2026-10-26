@@ -39,6 +39,8 @@ services:
       # --- Pages access policies -------------------------------------------
       ACCESS_POLICIES: ${ACCESS_POLICIES:-}
       DEFAULT_ACCESS_POLICY_ID: ${DEFAULT_ACCESS_POLICY_ID:-}
+      ACCESS_SERVICE_TOKEN_CLIENT_ID: ${ACCESS_SERVICE_TOKEN_CLIENT_ID:-}
+      ACCESS_SERVICE_TOKEN_CLIENT_SECRET: ${ACCESS_SERVICE_TOKEN_CLIENT_SECRET:-}
       ACCESS_POLICIES_FILE: ${ACCESS_POLICIES_FILE:-}
       # For a file catalog, set ACCESS_POLICIES_FILE to its container path
       # and mount the host file read-only using the volumes example below.

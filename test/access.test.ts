@@ -26,6 +26,7 @@ function mock(
   opts: {
     apps?: App[];
     policy?: unknown;
+    servicePolicy?: { id: string; decision: string; reusable?: boolean };
     badReadback?: boolean;
     forbidden?: boolean;
     pageTwo?: App[];
@@ -44,7 +45,10 @@ function mock(
         { status: 403 },
       );
     if (path.startsWith("/policies/"))
-      result = opts.policy ?? { id, decision: "allow", reusable: true };
+      result =
+        path === `/policies/${opts.servicePolicy?.id}`
+          ? opts.servicePolicy
+          : (opts.policy ?? { id, decision: "allow", reusable: true });
     else if (path.startsWith("/apps?"))
       result = path.endsWith("page=2") ? (opts.pageTwo ?? []) : apps;
     else if (path === "/apps" && method === "POST") {
@@ -135,4 +139,30 @@ test("checks all pages of Access applications for conflicting rules", async () =
     pageTwo: [app("site.pages.dev/public")],
   });
   await assert.rejects(ensureProjectAccess(client, project, id), /Overlapping/);
+});
+
+test("operator-configured reusable Service Auth policies remain untouched", async () => {
+  const serviceId = "597147a1-976b-4ef2-9af0-81d5d007fc34";
+  const apps = ["site.pages.dev", "*.site.pages.dev", "private.example.com"].map((host) => ({
+    ...app(host),
+    policies: [{ id }, { id: serviceId }],
+  }));
+  const { client, calls } = mock({
+    apps,
+    servicePolicy: { id: serviceId, decision: "non_identity", reusable: true },
+  });
+  await ensureProjectAccess(client, project, id);
+  assert.ok(calls.every((c) => c.method === "GET"));
+  assert.equal(calls.filter((c) => c.path === `/policies/${serviceId}`).length, 3);
+});
+
+test("additional Bypass or Allow policies still prevent deployment", async () => {
+  for (const decision of ["allow", "bypass"]) {
+    const serviceId = "597147a1-976b-4ef2-9af0-81d5d007fc34";
+    const { client } = mock({
+      apps: [{ ...app("site.pages.dev"), policies: [{ id }, { id: serviceId }] }],
+      servicePolicy: { id: serviceId, decision, reusable: true },
+    });
+    await assert.rejects(ensureProjectAccess(client, project, id), /exclusively/);
+  }
 });
