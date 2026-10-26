@@ -49,12 +49,12 @@
     "release": "semantic-release"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "blake3-wasm": "2.1.5",
     "express": "^5.1.0",
     "express-rate-limit": "^8.6.1",
     "helmet": "^8.3.0",
-    "zod": "3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
