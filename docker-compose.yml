@@ -36,6 +36,13 @@ services:
       # Optional: override the Cloudflare API base URL (testing).
       CLOUDFLARE_API_BASE_URL: ${CLOUDFLARE_API_BASE_URL:-}
 
+      # --- Pages access policies -------------------------------------------
+      ACCESS_POLICIES: ${ACCESS_POLICIES:-}
+      DEFAULT_ACCESS_POLICY_ID: ${DEFAULT_ACCESS_POLICY_ID:-}
+      ACCESS_POLICIES_FILE: ${ACCESS_POLICIES_FILE:-}
+      # For a file catalog, set ACCESS_POLICIES_FILE to its container path
+      # and mount the host file read-only using the volumes example below.
+
       # --- Server ----------------------------------------------------------
       PORT: ${PORT:-3000}
       HOST: ${HOST:-0.0.0.0}
@@ -67,3 +74,5 @@ services:
       # Secret for signing direct-upload URLs. Falls back to OAUTH_SIGNING_SECRET
       # or a per-process random; set it so upload URLs survive restarts.
       UPLOAD_SIGNING_SECRET: ${UPLOAD_SIGNING_SECRET:-}
+    # volumes:
+    #   - ./access-policies.yaml:/config/access-policies.yaml:ro

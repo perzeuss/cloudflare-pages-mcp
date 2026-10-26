@@ -20,6 +20,7 @@ import { MAX_FILES } from "./files.js";
 export interface StagedDeployment {
   id: string;
   projectName: string;
+  accessPolicyId?: string;
   branch?: string;
   createIfMissing: boolean;
   productionBranch: string;
@@ -52,6 +53,7 @@ export class StagingStore {
   /** Open a new staging deployment and return its id. */
   create(opts: {
     projectName: string;
+    accessPolicyId?: string;
     branch?: string;
     createIfMissing: boolean;
     productionBranch: string;
@@ -67,6 +69,7 @@ export class StagingStore {
     const staged: StagedDeployment = {
       id: randomUUID(),
       projectName: opts.projectName,
+      accessPolicyId: opts.accessPolicyId,
       branch: opts.branch,
       createIfMissing: opts.createIfMissing,
       productionBranch: opts.productionBranch,

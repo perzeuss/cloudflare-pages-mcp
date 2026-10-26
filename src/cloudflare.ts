@@ -47,20 +47,21 @@ export class CloudflareClient {
   constructor(
     private readonly accountId: string,
     private readonly apiToken: string,
+    private readonly apiBaseUrl = API_BASE,
   ) {}
 
   /** Reads credentials from the environment, throwing a clear error if absent. */
   static fromEnv(): CloudflareClient {
     try {
       const config = loadConfig();
-      return new CloudflareClient(config.accountId, config.apiToken);
+      return new CloudflareClient(config.accountId, config.apiToken, config.apiBaseUrl);
     } catch (err) {
       throw new CloudflareError(err instanceof Error ? err.message : String(err));
     }
   }
 
   private async json<T>(path: string, init: RequestInit = {}, token = this.apiToken): Promise<T> {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await fetch(`${this.apiBaseUrl}${path}`, {
       ...init,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -82,6 +83,11 @@ export class CloudflareClient {
       throw new CloudflareError(`Cloudflare API ${res.status} on ${path} — ${detail}`);
     }
     return body.result;
+  }
+
+  /** Account-scoped Access API; credentials stay on the server. */
+  async accessRequest<T>(suffix: string, init: RequestInit = {}): Promise<T> {
+    return this.json<T>(`/accounts/${this.accountId}/access${suffix}`, init);
   }
 
   private accountPath(suffix = ""): string {

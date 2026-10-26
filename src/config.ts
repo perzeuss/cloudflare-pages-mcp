@@ -1,5 +1,5 @@
 /**
- * Central configuration, loaded entirely from environment variables so the
+ * Central configuration, loaded from environment variables and an optional policy catalog so the
  * server can be configured for any deployment (Docker, local, managed hosts)
  * without code changes.
  *
@@ -7,6 +7,8 @@
  * OAuth settings are layered on so the same server can run as a remote Claude
  * custom connector.
  */
+
+import { readAccessPolicies, type AccessPolicyConfig } from "./access-policies.js";
 
 import { randomBytes } from "node:crypto";
 
@@ -32,7 +34,7 @@ export interface OAuthConfig {
   refreshTokenTtl: number;
 }
 
-export interface Config {
+export interface Config extends AccessPolicyConfig {
   // --- Cloudflare credentials (required) ---
   /** Cloudflare API token with Pages edit permission. */
   apiToken: string;
@@ -145,6 +147,7 @@ export function loadConfig(): Config {
   const publicBaseUrl = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
 
   return {
+    ...readAccessPolicies(),
     apiToken,
     accountId,
     apiBaseUrl: (process.env.CLOUDFLARE_API_BASE_URL || DEFAULT_API_BASE_URL).trim(),

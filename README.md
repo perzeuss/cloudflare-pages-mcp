@@ -180,6 +180,91 @@ Authentication modes are chosen automatically:
 - **Static token** when only `MCP_AUTH_TOKEN` is set.
 - **Open** when neither is set (use only behind your own network boundary).
 
+## Reusable Cloudflare Access policies
+
+Configure login providers and reusable **Allow** policies in Cloudflare Zero Trust.
+The server only stores names and policy IDs; it does not create login rules or
+handle visitor passwords or identity-provider secrets.
+
+Create a JSON or YAML file containing a name-to-ID mapping:
+
+```yaml
+private_pages: f174e90a-fafe-4643-bbbc-4a0ed4fc8415
+project_team: 597147a1-976b-4ef2-9af0-81d5d007fc34
+```
+
+```json
+{
+  "private_pages": "f174e90a-fafe-4643-bbbc-4a0ed4fc8415",
+  "project_team": "597147a1-976b-4ef2-9af0-81d5d007fc34"
+}
+```
+
+Configure the server with environment variables:
+
+```dotenv
+ACCESS_POLICIES_FILE=/config/access-policies.yaml
+# Alternatively, or to override individual names from the file:
+ACCESS_POLICIES={"private_pages":"f174e90a-fafe-4643-bbbc-4a0ed4fc8415"}
+DEFAULT_ACCESS_POLICY_ID=f174e90a-fafe-4643-bbbc-4a0ed4fc8415
+```
+
+`ACCESS_POLICIES` must be JSON. File catalogs support JSON and YAML. Names must
+start with a lowercase letter and contain only lowercase letters, digits and
+underscores (maximum 64 characters). IDs must be UUIDs. Duplicate YAML keys,
+aliases, unreadable files and invalid configuration stop startup. The file limit
+is 1 MiB. Restart the server after changing its configuration. With Docker,
+mount the file read-only and use its **container path** in `ACCESS_POLICIES_FILE`.
+
+Agents can discover the catalog with `list_access_policies` and look up a name
+with `get_access_policy {"name":"private_pages"}`. An omitted name returns the
+default ID. Select a policy on any project/deployment entry point:
+
+```json
+{
+  "project_name": "my-site",
+  "access_policy": "private_pages",
+  "files": [{ "path": "index.html", "content": "<h1>Private site</h1>" }]
+}
+```
+
+For staged uploads, pass `access_policy` to `create_deployment`; the resolved ID
+is retained until `publish_deployment`, where Cloudflare protection is checked.
+`create_project` also accepts `access_policy`. Explicit names take precedence
+over `DEFAULT_ACCESS_POLICY_ID`. Unknown names fail, even if a default exists.
+Tool callers cannot pass an arbitrary policy ID or disable the server default.
+If neither a selection nor a default exists, deployments retain their previous
+behavior; the server does not remove existing Access protection.
+
+The Cloudflare token needs **Cloudflare Pages: Edit** and, when using Access,
+**Access: Apps and Policies Write** on the same account. The server verifies that
+the selected policy is reusable and has action `Allow`, then creates or verifies
+full-host self-hosted Access applications for the actual project subdomain,
+`*.<project-subdomain>` (deployment and preview URLs), and all custom domains
+reported by Pages. Each application references the existing policy by ID.
+
+Before any assets are uploaded to Cloudflare, the server reads back the Access
+applications. Conflicting policies, path-specific applications, overlapping
+hostnames, public path overrides, preflight bypasses and API errors abort the
+upload. Existing applications with incompatible configuration are **not**
+overwritten; resolve the conflict in Cloudflare and retry. A partially failed
+operation can leave an empty Pages project or some Access applications in place;
+these are deliberately retained rather than deleting an operator's protection.
+Failed staged publications retain the staged files until retry or expiry.
+
+These checks verify the control-plane configuration, not edge propagation or a
+successful interactive login. Validate a private-browser login and anonymous
+requests to the production, deployment and custom-domain URLs before uploading
+sensitive content. Changes made directly in Cloudflare can affect protection
+between checks. Newly added custom domains are included on the next protected
+deployment and should be protected before routing traffic to them. There is no
+custom authentication Worker, and existing deployment URLs remain subject to
+the hostname-based Access rules.
+
+References: [reusable policies](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/policy-management/),
+[Access application API](https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/create/),
+[Pages production and preview protection](https://developers.cloudflare.com/pages/platform/known-issues/#enable-access-on-your-pagesdev-domain).
+
 ## Quickstart (Docker)
 
 ```bash

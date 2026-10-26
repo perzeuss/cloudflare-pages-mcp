@@ -236,7 +236,9 @@ test("buildMcpServer registers the Cloudflare Pages tools", async () => {
     "create_upload_url",
     "delete_project",
     "deploy",
+    "get_access_policy",
     "get_project",
+    "list_access_policies",
     "list_projects",
     "publish_deployment",
   ]);
