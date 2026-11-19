@@ -93,7 +93,8 @@ class FakeCloudflare extends CloudflareClient {
     return true;
   }
   override async findZone(hostname: string) {
-    return hostname.endsWith("example.com") ? { id: "zone", name: "example.com" } : undefined;
+    const inZone = hostname === "example.com" || hostname.endsWith(".example.com");
+    return inZone ? { id: "zone", name: "example.com" } : undefined;
   }
   override async listDnsRecords(_zone: string, name: string) {
     return this.records.filter((r) => r.name === name);
@@ -268,7 +269,7 @@ test("a failed DNS write detaches the freshly attached domain", async () => {
       "dns CNAME example.com site.pages.dev true",
       "detach example.com",
     ]);
-    assert.ok(!c.cf.domains.includes("example.com"));
+    assert.deepEqual(c.cf.domains, ["site.pages.dev"]);
   } finally {
     await c.close();
   }
