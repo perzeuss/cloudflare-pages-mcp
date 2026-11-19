@@ -230,6 +230,7 @@ test("buildMcpServer registers the Cloudflare Pages tools", async () => {
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
+    "add_custom_domain",
     "add_files",
     "create_deployment",
     "create_project",

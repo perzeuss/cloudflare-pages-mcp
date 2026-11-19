@@ -320,6 +320,32 @@ References: [reusable policies](https://developers.cloudflare.com/cloudflare-one
 [Access application API](https://developers.cloudflare.com/api/resources/zero_trust/subresources/access/subresources/applications/methods/create/),
 [Pages production and preview protection](https://developers.cloudflare.com/pages/platform/known-issues/#enable-access-on-your-pagesdev-domain).
 
+### Public custom domains
+
+An Allow policy always requires a Cloudflare Access login, even when it allows
+everyone. To serve a site without a login on its own domain while keeping the
+`pages.dev` hosts private, list the exact hostnames per project in
+`PUBLIC_DOMAINS` (JSON):
+
+```bash
+PUBLIC_DOMAINS={"my-site":["example.com","www.example.com"]}
+```
+
+Only these hostnames are left open. Protected deployments of `my-site` still
+create or verify Access applications for `my-site.pages.dev`,
+`*.my-site.pages.dev` (production, deployment and preview URLs) and every other
+custom domain of the project. An existing operator Access application that
+covers a listed hostname is left untouched and still applies.
+
+`add_custom_domain {"project_name":"my-site","domain":"example.com"}` attaches a
+listed hostname and creates a proxied `CNAME example.com → my-site.pages.dev` in
+the account's Cloudflare zone. It refuses hostnames not listed for the project
+and never replaces or overrides DNS: an existing A, AAAA or CNAME record that
+does not point at the project, or a wildcard that serves the hostname today,
+stops it before anything is written. MX and TXT records may coexist. If the DNS
+write fails after the domain was attached, the domain is detached again. The
+token additionally needs **Zone: Read** and **Zone: DNS Edit** for that zone.
+
 ### Policy files with Dokploy Compose
 
 Create a File Mount in Dokploy with File Path `policies.yaml` and your YAML

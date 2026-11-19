@@ -25,6 +25,27 @@ export interface PagesProject {
   created_on?: string;
 }
 
+export interface PagesDomain {
+  name: string;
+  status?: string;
+  validation_data?: { status?: string; error_message?: string };
+  verification_data?: { status?: string; error_message?: string };
+}
+
+export interface DnsRecord {
+  id: string;
+  type: string;
+  name: string;
+  content: string;
+  proxied?: boolean;
+}
+
+export interface Zone {
+  id: string;
+  name: string;
+  account?: { id?: string };
+}
+
 export interface Deployment {
   id: string;
   url: string;
@@ -116,6 +137,57 @@ export class CloudflareClient {
     return this.json<PagesProject>(this.accountPath(), {
       method: "POST",
       body: JSON.stringify({ name, production_branch: productionBranch }),
+    });
+  }
+
+  /** Attach a custom domain to a Pages project. */
+  async addProjectDomain(project: string, domain: string): Promise<PagesDomain> {
+    return this.json<PagesDomain>(this.accountPath(`/${encodeURIComponent(project)}/domains`), {
+      method: "POST",
+      body: JSON.stringify({ name: domain }),
+    });
+  }
+
+  async deleteProjectDomain(project: string, domain: string): Promise<void> {
+    await this.json<unknown>(
+      this.accountPath(`/${encodeURIComponent(project)}/domains/${encodeURIComponent(domain)}`),
+      { method: "DELETE" },
+    );
+  }
+
+  async getProjectDomain(project: string, domain: string): Promise<PagesDomain> {
+    return this.json<PagesDomain>(
+      this.accountPath(`/${encodeURIComponent(project)}/domains/${encodeURIComponent(domain)}`),
+    );
+  }
+
+  /** The zone in this account that holds `hostname`, matched by its longest suffix. */
+  async findZone(hostname: string): Promise<Zone | undefined> {
+    const labels = hostname.toLowerCase().split(".");
+    for (let i = 0; i < labels.length - 1; i++) {
+      const name = labels.slice(i).join(".");
+      const zones = await this.json<Zone[]>(
+        `/zones?name=${encodeURIComponent(name)}&account.id=${encodeURIComponent(this.accountId)}`,
+      );
+      const zone = zones.find((z) => z.name === name && z.account?.id === this.accountId);
+      if (zone) return zone;
+    }
+    return undefined;
+  }
+
+  async listDnsRecords(zoneId: string, name: string): Promise<DnsRecord[]> {
+    return this.json<DnsRecord[]>(
+      `/zones/${encodeURIComponent(zoneId)}/dns_records?name=${encodeURIComponent(name)}`,
+    );
+  }
+
+  async createDnsRecord(
+    zoneId: string,
+    record: { type: "CNAME"; name: string; content: string; proxied: boolean },
+  ): Promise<DnsRecord> {
+    return this.json<DnsRecord>(`/zones/${encodeURIComponent(zoneId)}/dns_records`, {
+      method: "POST",
+      body: JSON.stringify({ ...record, ttl: 1 }),
     });
   }
 
