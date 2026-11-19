@@ -25,6 +25,8 @@ export interface AccessLoginOptions {
   methods?: LoginMethod[];
   /** Explicit identity provider IDs; only needed if detection by type is ambiguous. */
   idpIds?: LoginMethodIdpIds;
+  /** Custom domains of this project that stay without an Access application. */
+  publicDomains?: string[];
 }
 
 /** Cloudflare identity provider types behind each login method. */
@@ -154,6 +156,47 @@ async function verify(
   }
 }
 
+/**
+ * The hostnames the selected policy must protect: the project's pages.dev hosts
+ * (production, deployments, previews) always, and every custom domain except
+ * the exact hostnames the operator listed as public.
+ */
+export function protectedHosts(project: PagesProject, publicDomains: string[] = []): string[] {
+  const primary = project.subdomain || `${project.name}.pages.dev`;
+  const open = new Set(publicDomains.map((host) => host.toLowerCase()));
+  const isPagesHost = (host: string) =>
+    host.toLowerCase() === primary.toLowerCase() ||
+    host.toLowerCase().endsWith(`.${primary.toLowerCase()}`);
+  const custom = (project.domains ?? []).filter(
+    (host) => isPagesHost(host) || !open.has(host.toLowerCase()),
+  );
+  return [...new Set([primary, `*.${primary}`, ...custom])];
+}
+
+async function listAccessApps(client: CloudflareClient): Promise<AccessApplication[]> {
+  const apps: AccessApplication[] = [];
+  for (let page = 1; ; page++) {
+    const batch = await client.accessRequest<AccessApplication[]>(
+      `/apps?per_page=100&page=${page}`,
+    );
+    apps.push(...batch);
+    if (batch.length < 100) break;
+    if (page >= 1000) throw new Error("Access application listing exceeded the safety limit.");
+  }
+  return apps;
+}
+
+/** Names of Access applications whose destinations cover `hostname`, including wildcards. */
+export async function accessAppsCovering(
+  client: CloudflareClient,
+  hostname: string,
+): Promise<string[]> {
+  const apps = await listAccessApps(client);
+  return apps
+    .filter((app) => destinations(app).some((d) => overlaps(d, hostname)))
+    .map((app) => app.name || app.id);
+}
+
 /** Establish full-host protection before uploading any site assets. Never edits operator rules. */
 export async function ensureProjectAccess(
   client: CloudflareClient,
@@ -174,21 +217,12 @@ export async function ensureProjectAccess(
     ? await resolveLoginIdps(client, login.methods, login.idpIds)
     : undefined;
 
-  const primary = project.subdomain || `${project.name}.pages.dev`;
-  const hosts = [...new Set([primary, `*.${primary}`, ...(project.domains ?? [])])];
+  const hosts = protectedHosts(project, login.publicDomains);
   if (hosts.some((host) => !/^(\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(host))) {
     throw new Error("Cannot verify Access protection for an invalid Pages hostname.");
   }
 
-  const apps: AccessApplication[] = [];
-  for (let page = 1; ; page++) {
-    const batch = await client.accessRequest<AccessApplication[]>(
-      `/apps?per_page=100&page=${page}`,
-    );
-    apps.push(...batch);
-    if (batch.length < 100) break;
-    if (page >= 1000) throw new Error("Access application listing exceeded the safety limit.");
-  }
+  const apps = await listAccessApps(client);
 
   // Reject overlapping apps (including more-specific path rules) rather than silently
   // replacing existing operator settings or overlooking a bypass application.

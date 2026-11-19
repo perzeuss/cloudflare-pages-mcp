@@ -10,11 +10,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { readProjectPage } from "./read-page.js";
-import { resolveAccessPolicy } from "./access-policies.js";
-import { ensureProjectAccess } from "./access.js";
+import { hostnamePattern, publicDomainsOf, resolveAccessPolicy } from "./access-policies.js";
+import { accessAppsCovering, ensureProjectAccess } from "./access.js";
 
 import type { Config } from "./config.js";
-import { CloudflareClient } from "./cloudflare.js";
+import { CloudflareClient, type DnsRecord } from "./cloudflare.js";
 import { collectFiles, normalizePath } from "./files.js";
 import { signToken } from "./security.js";
 import { StagingStore } from "./staging.js";
@@ -79,6 +79,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
       await ensureProjectAccess(client, await client.getProject(name), id, {
         methods: config.accessLoginMethods,
         idpIds: config.accessIdpIds,
+        publicDomains: publicDomainsOf(config, name),
       });
   };
 
@@ -454,6 +455,122 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           liveUrls(p),
           `Custom domains: ${domains}`,
           `Production branch: ${p.production_branch ?? "main"}`,
+        ].join("\n");
+      }),
+  );
+
+  server.registerTool(
+    "add_custom_domain",
+    {
+      annotations: { title: "Add a public custom domain to a Pages project" },
+      description:
+        "Attach an operator-approved custom domain to a Pages project and point it at the project with a proxied CNAME in the account's Cloudflare zone. Only hostnames listed for the project in the server's PUBLIC_DOMAINS setting are accepted; they are served WITHOUT Cloudflare Access, while <project>.pages.dev stays protected by the selected policy. Never replaces or overrides an existing DNS record (including wildcards).",
+      inputSchema: {
+        project_name: z.string().describe("Existing Pages project name."),
+        domain: z
+          .string()
+          .describe("Hostname listed for the project in PUBLIC_DOMAINS, e.g. example.com."),
+      },
+    },
+    async (args) =>
+      run(async () => {
+        const domain = args.domain.trim().toLowerCase().replace(/\.$/, "");
+        const allowed = publicDomainsOf(config, args.project_name);
+        if (!allowed.includes(domain)) {
+          throw new Error(
+            allowed.length
+              ? `${domain} is not listed for "${args.project_name}" in PUBLIC_DOMAINS (allowed: ${allowed.join(", ")}).`
+              : `Project "${args.project_name}" has no public domains in PUBLIC_DOMAINS. The server operator decides which hostnames may be served without Access.`,
+          );
+        }
+        if (!hostnamePattern.test(domain)) throw new Error(`Invalid domain: ${args.domain}`);
+        const project = await client.getProject(args.project_name);
+        const target = project.subdomain || `${project.name}.pages.dev`;
+        if (domain === target || domain.endsWith(`.${target}`)) {
+          throw new Error(`${domain} is a pages.dev host of the project, not a custom domain.`);
+        }
+
+        const zone = await client.findZone(domain);
+        if (!zone) {
+          throw new Error(
+            `No Cloudflare zone for ${domain} in this account, or the API token lacks Zone: Read for it.`,
+          );
+        }
+        const pointsHere = (r: DnsRecord) =>
+          r.type === "CNAME" && r.content.toLowerCase().replace(/\.$/, "") === target.toLowerCase();
+        const addressing = (r: DnsRecord) => ["A", "AAAA", "CNAME"].includes(r.type);
+
+        // A more specific record would override a wildcard that serves this host today.
+        const labels = domain.split(".");
+        const zoneDepth = zone.name.split(".").length;
+        for (let i = 1; labels.length - i >= zoneDepth; i++) {
+          const wildcard = `*.${labels.slice(i).join(".")}`;
+          const covering = (await client.listDnsRecords(zone.id, wildcard)).filter(addressing);
+          if (covering.some((r) => !pointsHere(r))) {
+            throw new Error(
+              `${wildcard} already serves ${domain}. A record for ${domain} would override it; resolve this in Cloudflare.`,
+            );
+          }
+        }
+
+        const existing = (await client.listDnsRecords(zone.id, domain)).filter(addressing);
+        if (existing.some((r) => !pointsHere(r))) {
+          throw new Error(
+            `${domain} already has ${existing.map((r) => r.type).join(", ")} records that do not point at ${target}. Resolve them in Cloudflare; this tool never replaces records.`,
+          );
+        }
+
+        const attached = project.domains?.includes(domain) ?? false;
+        if (!attached) await client.addProjectDomain(project.name, domain);
+
+        let record: DnsRecord | undefined = existing[0];
+        let created = false;
+        if (!record) {
+          try {
+            // Cloudflare may create the record itself when the zone is in the same account.
+            record = (await client.listDnsRecords(zone.id, domain)).find(pointsHere);
+            if (!record) {
+              record = await client.createDnsRecord(zone.id, {
+                type: "CNAME",
+                name: domain,
+                content: target,
+                proxied: true,
+              });
+              created = true;
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (attached) throw err;
+            try {
+              await client.deleteProjectDomain(project.name, domain);
+            } catch {
+              throw new Error(
+                `${message}\n${domain} stays attached to "${project.name}" without a DNS record; remove it in Cloudflare or retry.`,
+                { cause: err },
+              );
+            }
+            throw new Error(`${message}\nDetached ${domain} again; nothing was left behind.`, {
+              cause: err,
+            });
+          }
+        }
+
+        let status = "unknown";
+        try {
+          const d = await client.getProjectDomain(project.name, domain);
+          status = `${d.status ?? "unknown"}${d.validation_data?.error_message ? ` (${d.validation_data.error_message})` : ""}`;
+        } catch {
+          // The domain and record are in place; the status is only informational.
+        }
+        const covering = await accessAppsCovering(client, domain);
+        return [
+          `${attached ? "Already attached" : "Attached"} ${domain} to "${project.name}".`,
+          `DNS: ${created ? "created" : "existing"} ${record.proxied ? "proxied" : "DNS-only"} CNAME ${domain} → ${target} in zone ${zone.name}.`,
+          `Domain status: ${status}`,
+          covering.length
+            ? `Still behind Cloudflare Access application(s): ${covering.join(", ")}. Remove them in Cloudflare to make ${domain} public.`
+            : `No Cloudflare Access application covers https://${domain}.`,
+          `Still protected: https://${target} and its deployment/preview URLs.`,
         ].join("\n");
       }),
   );

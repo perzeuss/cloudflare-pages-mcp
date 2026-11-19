@@ -31,6 +31,43 @@ export interface AccessPolicyConfig {
   accessLoginMethods?: LoginMethod[];
   /** Explicit identity provider IDs, only needed when auto-detection is ambiguous. */
   accessIdpIds?: LoginMethodIdpIds;
+  /**
+   * Custom domains served without Cloudflare Access, per Pages project. Only
+   * these exact hostnames are left open; the project's `<project>.pages.dev`
+   * hosts (production, deployment and preview URLs) and any other custom domain
+   * stay protected by the selected policy. Operator-owned; never set by tool callers.
+   */
+  publicDomains?: Record<string, string[]>;
+}
+
+/** A plain hostname: no wildcard, no port, no trailing dot; punycode TLDs allowed. */
+export const hostnamePattern =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
+const projectName = z.string().regex(/^[a-z0-9][a-z0-9-]{0,57}$/);
+const hostname = z
+  .string()
+  .transform((host) => host.trim().toLowerCase())
+  .pipe(z.string().regex(hostnamePattern))
+  .refine((host) => !host.endsWith(".pages.dev"), "pages.dev hosts cannot be public domains");
+const publicDomainsSchema = z.record(projectName, z.array(hostname).min(1));
+
+/** Parses PUBLIC_DOMAINS, a JSON object mapping a Pages project to its public hostnames. */
+export function readPublicDomains(raw: string | undefined): Record<string, string[]> {
+  const text = raw?.trim();
+  if (!text) return {};
+  const value: unknown = JSON.parse(text);
+  if (value && typeof value === "object")
+    Object.keys(value).forEach((key) => projectName.parse(key));
+  const parsed = publicDomainsSchema.parse(value);
+  return Object.fromEntries(
+    Object.entries(parsed).map(([project, hosts]) => [project, [...new Set(hosts)]]),
+  );
+}
+
+/** The custom domains the operator allows this project to serve without Access. */
+export function publicDomainsOf(config: AccessPolicyConfig, project: string): string[] {
+  const domains = config.publicDomains ?? {};
+  return Object.hasOwn(domains, project) ? domains[project]! : [];
 }
 
 const methodSchema = z.enum(LOGIN_METHODS);
@@ -87,6 +124,7 @@ export function readAccessPolicies(env: NodeJS.ProcessEnv = process.env): Access
     defaultAccessPolicyId: rawDefault ? policyId.parse(rawDefault) : undefined,
     accessLoginMethods,
     accessIdpIds: readIdpIds(env, accessLoginMethods),
+    publicDomains: readPublicDomains(env.PUBLIC_DOMAINS),
   };
 }
 

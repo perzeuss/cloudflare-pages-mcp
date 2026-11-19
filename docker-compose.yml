@@ -38,6 +38,8 @@ services:
 
       # --- Pages access policies -------------------------------------------
       ACCESS_POLICIES: ${ACCESS_POLICIES:-}
+      # Custom domains served without Access, per project (pages.dev stays protected).
+      PUBLIC_DOMAINS: ${PUBLIC_DOMAINS:-}
       DEFAULT_ACCESS_POLICY_ID: ${DEFAULT_ACCESS_POLICY_ID:-}
       ACCESS_SERVICE_TOKEN_CLIENT_ID: ${ACCESS_SERVICE_TOKEN_CLIENT_ID:-}
       ACCESS_SERVICE_TOKEN_CLIENT_SECRET: ${ACCESS_SERVICE_TOKEN_CLIENT_SECRET:-}
