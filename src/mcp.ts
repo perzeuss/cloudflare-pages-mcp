@@ -9,6 +9,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+import { readProjectPage } from "./read-page.js";
+import { resolveAccessPolicy } from "./access-policies.js";
+import { ensureProjectAccess } from "./access.js";
+
 import type { Config } from "./config.js";
 import { CloudflareClient } from "./cloudflare.js";
 import { collectFiles, normalizePath } from "./files.js";
@@ -63,10 +67,60 @@ function liveUrls(project: { name: string; subdomain?: string }, deploymentUrl?:
 export function buildMcpServer(ctx: ServerContext): McpServer {
   const { client, staging, config } = ctx;
 
+  const policyInput = z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Configured Access policy name, e.g. private_pages. Omit to use DEFAULT_ACCESS_POLICY_ID. Unknown names fail; callers cannot disable the default.",
+    );
+  const protect = async (name: string, id?: string) => {
+    if (id)
+      await ensureProjectAccess(client, await client.getProject(name), id, {
+        methods: config.accessLoginMethods,
+        idpIds: config.accessIdpIds,
+      });
+  };
+
   const server = new McpServer({
     name: "cloudflare-pages-mcp",
     version: "1.0.0",
   });
+
+  server.registerTool(
+    "list_access_policies",
+    {
+      annotations: { title: "List configured Access policies", readOnlyHint: true },
+      description:
+        "List operator-configured policy names and IDs, the default policy ID and the login methods (google, otp) protected sites accept; null means unrestricted. Who may sign in (accounts) and credentials remain managed in Cloudflare.",
+      inputSchema: {},
+    },
+    async () =>
+      run(async () =>
+        JSON.stringify({
+          policies: config.accessPolicies ?? {},
+          default_access_policy_id: config.defaultAccessPolicyId ?? null,
+          login_methods: config.accessLoginMethods ?? null,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "get_access_policy",
+    {
+      annotations: { title: "Get a configured Access policy", readOnlyHint: true },
+      description:
+        "Resolve a configured policy name to its ID. Omit name to retrieve the server default; does not create or modify Cloudflare policies.",
+      inputSchema: { name: z.string().optional() },
+    },
+    async (args) =>
+      run(async () =>
+        JSON.stringify({
+          name: args.name ?? null,
+          id: resolveAccessPolicy(config, args.name) ?? null,
+        }),
+      ),
+  );
 
   server.registerTool(
     "create_project",
@@ -76,6 +130,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
         "Create an empty Direct Upload Cloudflare Pages project. The project name becomes the <name>.pages.dev subdomain (lowercase letters, digits and hyphens). Use `deploy` afterwards to publish files. `deploy` can also auto-create the project, so calling this first is optional.",
       inputSchema: {
         name: z.string().describe("Project name; also the *.pages.dev subdomain."),
+        access_policy: policyInput,
         production_branch: z
           .string()
           .optional()
@@ -84,7 +139,9 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     },
     async (args) =>
       run(async () => {
+        const policyId = resolveAccessPolicy(config, args.access_policy);
         const project = await client.createProject(args.name, args.production_branch ?? "main");
+        await protect(project.name, policyId);
         return `Created project "${project.name}".\n${liveUrls(project)}`;
       }),
   );
@@ -97,6 +154,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
         "Upload files and create a deployment in a single call, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs. NOTE: a single tool call is bounded by the model's output size — for large sites (many files or thousands of lines) use create_deployment + create_upload_url + publish_deployment instead.",
       inputSchema: {
         project_name: z.string().describe("Target Pages project name."),
+        access_policy: policyInput,
         files: z
           .array(inlineFileSchema)
           .min(1)
@@ -121,12 +179,14 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     },
     async (args) =>
       run(async () => {
+        const policyId = resolveAccessPolicy(config, args.access_policy);
         const files = await collectFiles({ files: args.files });
 
         if (args.create_if_missing !== false && !(await client.projectExists(args.project_name))) {
           await client.createProject(args.project_name, args.production_branch ?? "main");
         }
 
+        await protect(args.project_name, policyId);
         const { deployment, uploaded, total } = await client.deploy({
           projectName: args.project_name,
           files,
@@ -149,6 +209,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
         "Begin an incremental deployment for a large site. Returns a deploy_id. Add files by uploading them from disk: call create_upload_url with a batch of `paths` to get signed URLs, upload every file with the cloudflare-pages-upload skill (or curl), then call publish_deployment to upload everything as ONE Cloudflare deployment. Use this instead of `deploy` when the site is too large to pass in a single call or includes binary assets.",
       inputSchema: {
         project_name: z.string().describe("Target Pages project name."),
+        access_policy: policyInput,
         branch: z
           .string()
           .optional()
@@ -167,7 +228,9 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     },
     async (args) =>
       run(async () => {
+        const policyId = resolveAccessPolicy(config, args.access_policy);
         const staged = staging.create({
+          accessPolicyId: policyId,
           projectName: args.project_name,
           branch: args.branch,
           createIfMissing: args.create_if_missing !== false,
@@ -319,6 +382,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           await client.createProject(staged.projectName, staged.productionBranch);
         }
 
+        await protect(staged.projectName, staged.accessPolicyId ?? config.defaultAccessPolicyId);
         const { deployment, uploaded, total } = await client.deploy({
           projectName: staged.projectName,
           files,
@@ -350,6 +414,26 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           .map((p) => `- ${p.name} → https://${p.subdomain || `${p.name}.pages.dev`}`)
           .join("\n");
       }),
+  );
+
+  server.registerTool(
+    "read_page",
+    {
+      annotations: { title: "Read a published Pages page", readOnlyHint: true },
+      description:
+        "Read text content from an existing project's production pages.dev URL. Uses optional server-side Access service-token credentials; never changes access policies. No external URLs, redirects or binary downloads. Maximum 1 MiB; 20-second timeout.",
+      inputSchema: {
+        project_name: z
+          .string()
+          .min(1)
+          .describe("Existing Pages project name in this Cloudflare account."),
+        path: z.string().optional().describe("Site-relative path, e.g. / or /test/. Default: /."),
+      },
+    },
+    async (args) =>
+      run(async () =>
+        JSON.stringify(await readProjectPage(client, config, args.project_name, args.path ?? "/")),
+      ),
   );
 
   server.registerTool(

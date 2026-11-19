@@ -1,0 +1,8 @@
+# Copy to access-policies.yaml and replace this example UUID with an existing
+# reusable Cloudflare Access Allow policy ID from your account.
+# Names are freely chosen lookup names, not project names or user groups.
+private_pages: "f174e90a-fafe-4643-bbbc-4a0ed4fc8415"
+
+# Set ACCESS_POLICIES_FILE to the file path inside the server/container.
+# Configure DEFAULT_ACCESS_POLICY_ID separately in the environment if desired.
+# A key named "default" does not configure the default policy.

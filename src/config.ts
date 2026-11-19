@@ -1,5 +1,5 @@
 /**
- * Central configuration, loaded entirely from environment variables so the
+ * Central configuration, loaded from environment variables and an optional policy catalog so the
  * server can be configured for any deployment (Docker, local, managed hosts)
  * without code changes.
  *
@@ -7,6 +7,8 @@
  * OAuth settings are layered on so the same server can run as a remote Claude
  * custom connector.
  */
+
+import { readAccessPolicies, type AccessPolicyConfig } from "./access-policies.js";
 
 import { randomBytes } from "node:crypto";
 
@@ -32,7 +34,7 @@ export interface OAuthConfig {
   refreshTokenTtl: number;
 }
 
-export interface Config {
+export interface Config extends AccessPolicyConfig {
   // --- Cloudflare credentials (required) ---
   /** Cloudflare API token with Pages edit permission. */
   apiToken: string;
@@ -40,6 +42,9 @@ export interface Config {
   accountId: string;
   /** Base URL for the Cloudflare API (override for testing). */
   apiBaseUrl: string;
+
+  /** Optional server-side credentials for reading Access-protected Pages. */
+  accessServiceToken?: { clientId: string; clientSecret: string };
 
   // --- HTTP server ---
   /** HTTP port the server listens on. */
@@ -142,9 +147,31 @@ export function loadConfig(): Config {
     throw new Error("CLOUDFLARE_ACCOUNT_ID is required. Set it as an environment variable.");
   }
 
+  const clientId = process.env.ACCESS_SERVICE_TOKEN_CLIENT_ID?.trim();
+  const clientSecret = process.env.ACCESS_SERVICE_TOKEN_CLIENT_SECRET?.trim();
+  if (Boolean(clientId) !== Boolean(clientSecret)) {
+    throw new Error(
+      "Set both ACCESS_SERVICE_TOKEN_CLIENT_ID and ACCESS_SERVICE_TOKEN_CLIENT_SECRET, or neither.",
+    );
+  }
+
+  if ([clientId, clientSecret].some((value) => value && /[^\x21-\x7e]/.test(value))) {
+    throw new Error(
+      "Access service-token credentials must contain printable ASCII without whitespace.",
+    );
+  }
+
+  if (clientId && !process.env.MCP_AUTH_TOKEN?.trim() && !process.env.OAUTH_PASSWORD?.trim()) {
+    throw new Error(
+      "Access service-token reads require MCP_AUTH_TOKEN or OAUTH_PASSWORD to protect the MCP endpoint.",
+    );
+  }
+
   const publicBaseUrl = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
 
   return {
+    ...readAccessPolicies(),
+    accessServiceToken: clientId && clientSecret ? { clientId, clientSecret } : undefined,
     apiToken,
     accountId,
     apiBaseUrl: (process.env.CLOUDFLARE_API_BASE_URL || DEFAULT_API_BASE_URL).trim(),

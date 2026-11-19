@@ -34,7 +34,7 @@ export interface CreatedApp {
  * Construct the configured Express app and its shared Cloudflare client.
  */
 export function createApp(config: Config): CreatedApp {
-  const client = new CloudflareClient(config.accountId, config.apiToken);
+  const client = new CloudflareClient(config.accountId, config.apiToken, config.apiBaseUrl);
   // Shared across requests so chunked deployments persist between tool calls.
   const staging = new StagingStore();
 
