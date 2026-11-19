@@ -42,6 +42,11 @@ services:
       ACCESS_SERVICE_TOKEN_CLIENT_ID: ${ACCESS_SERVICE_TOKEN_CLIENT_ID:-}
       ACCESS_SERVICE_TOKEN_CLIENT_SECRET: ${ACCESS_SERVICE_TOKEN_CLIENT_SECRET:-}
       ACCESS_POLICIES_FILE: ${ACCESS_POLICIES_FILE:-}
+      # Login methods protected sites accept (google, otp). Empty = unrestricted.
+      ACCESS_LOGIN_METHODS: ${ACCESS_LOGIN_METHODS:-}
+      # Only needed if several identity providers match a method.
+      ACCESS_GOOGLE_IDP_ID: ${ACCESS_GOOGLE_IDP_ID:-}
+      ACCESS_OTP_IDP_ID: ${ACCESS_OTP_IDP_ID:-}
       # For a file catalog, set ACCESS_POLICIES_FILE to its container path
       # and mount the host file read-only using the volumes example below.
 

@@ -186,7 +186,10 @@ Authentication modes are chosen automatically:
 
 Configure login providers and reusable **Allow** policies in Cloudflare Zero Trust.
 The server only stores names and policy IDs; it does not create login rules or
-handle visitor passwords or identity-provider secrets.
+handle visitor passwords or identity-provider secrets. Which **login methods**
+(Google, one-time PIN) a protected site accepts is set once on the server, see
+[Login methods](#login-methods-google-and-one-time-pin), so the policies only
+have to list **accounts**.
 
 Copy [access-policies.example.yaml](access-policies.example.yaml) to
 `access-policies.yaml`, or [access-policies.example.json](access-policies.example.json)
@@ -264,6 +267,45 @@ overwritten; resolve the conflict in Cloudflare and retry. A partially failed
 operation can leave an empty Pages project or some Access applications in place;
 these are deliberately retained rather than deleting an operator's protection.
 Failed staged publications retain the staged files until retry or expiry.
+
+### Login methods (Google and one-time PIN)
+
+Without further configuration, Cloudflare offers every identity provider of the
+account at login, so each policy would have to restrict the method itself (the
+"Login Methods" selector). Set the allowed methods once on the server instead:
+
+```dotenv
+ACCESS_LOGIN_METHODS=google,otp
+```
+
+| Value    | Cloudflare identity provider                          |
+| -------- | ----------------------------------------------------- |
+| `google` | Google (`google`) or Google Workspace (`google-apps`) |
+| `otp`    | One-time PIN (`onetimepin`), the code is sent by mail |
+
+Use one or both, separated by commas or spaces; case is ignored and anything else
+stops startup. The server then sets `allowed_idps` on every Access application it
+creates, so a policy only needs rules for **accounts** (for example the emails or
+email domains allowed to enter), independent of how they sign in. A visitor is let
+in when the method is enabled here **and** their account is allowed by the policy.
+Leave `ACCESS_LOGIN_METHODS` unset to keep the previous, unrestricted behavior.
+
+The identity providers themselves (including the Google client ID and secret)
+stay configured in Cloudflare Zero Trust under **Settings > Authentication**.
+The server finds them by type. If several providers match a method, it stops
+instead of guessing: set `ACCESS_GOOGLE_IDP_ID` or `ACCESS_OTP_IDP_ID` to the ID of
+the one to use. A missing provider also stops the operation, before any Access
+application is created and before any asset is uploaded.
+
+The token additionally needs **Access: Organizations, Identity Providers, and
+Groups Read** to look up the providers. `list_access_policies` reports the active
+`login_methods` (`null` means unrestricted).
+
+Existing Access applications are never edited. If one already exists for a host
+and does not allow exactly the enabled providers, the upload is rejected with an
+explanatory error. Applications created before you set `ACCESS_LOGIN_METHODS`
+allow every provider, so adjust their **Login methods** once in Cloudflare (or
+delete them so the server recreates them) and retry.
 
 These checks verify the control-plane configuration, not edge propagation or a
 successful interactive login. Validate a private-browser login and anonymous

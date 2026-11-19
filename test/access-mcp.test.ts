@@ -27,6 +27,7 @@ class FakeCloudflare extends CloudflareClient {
   calls: string[] = [];
   apps: Record<string, unknown>[] = [];
   denyAccess = false;
+  providers: { id: string; type: string }[] = [];
   override async projectExists() {
     this.calls.push("exists");
     return true;
@@ -41,6 +42,7 @@ class FakeCloudflare extends CloudflareClient {
   override async accessRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     this.calls.push(path);
     if (this.denyAccess) throw new Error("Access permission denied");
+    if (path.startsWith("/identity_providers")) return this.providers as T;
     if (path.startsWith("/policies/"))
       return { id: path.slice(10), decision: "allow", reusable: true } as T;
     if (path.startsWith("/apps?")) return this.apps as T;
@@ -222,6 +224,67 @@ test("read_page returns content through MCP without changing Access applications
     assert.deepEqual(c.cf.apps, []);
   } finally {
     globalThis.fetch = originalFetch;
+    await c.close();
+  }
+});
+
+const googleIdp = { id: "11111111-1111-4111-8111-111111111111", type: "google" };
+const otpIdp = { id: "22222222-2222-4222-8222-222222222222", type: "onetimepin" };
+
+test("login methods are listed and unrestricted by default", async () => {
+  const c = await connect();
+  try {
+    const listed = JSON.parse(
+      (await c.client.callTool({ name: "list_access_policies", arguments: {} })).content![0]!
+        .text as string,
+    );
+    assert.equal(listed.login_methods, null);
+  } finally {
+    await c.close();
+  }
+});
+
+test("deploy restricts protected sites to the enabled login methods before upload", async () => {
+  const c = await connect({ ...base, accessLoginMethods: ["google", "otp"] });
+  c.cf.providers = [
+    googleIdp,
+    otpIdp,
+    { id: "33333333-3333-4333-8333-333333333333", type: "github" },
+  ];
+  try {
+    const listed = JSON.parse(
+      (await c.client.callTool({ name: "list_access_policies", arguments: {} })).content![0]!
+        .text as string,
+    );
+    assert.deepEqual(listed.login_methods, ["google", "otp"]);
+
+    const result = await c.client.callTool({
+      name: "deploy",
+      arguments: { project_name: "site", files: [{ path: "index.html", content: "test" }] },
+    });
+    assert.ok(!result.isError, text(result));
+    assert.equal(c.cf.apps.length, 2);
+    for (const created of c.cf.apps)
+      assert.deepEqual(created.allowed_idps, [googleIdp.id, otpIdp.id]);
+    assert.ok(c.cf.calls.indexOf("UPLOAD") > c.cf.calls.findLastIndex((p) => p === "/apps"));
+  } finally {
+    await c.close();
+  }
+});
+
+test("deploy fails closed when an enabled login method has no identity provider", async () => {
+  const c = await connect({ ...base, accessLoginMethods: ["google", "otp"] });
+  c.cf.providers = [otpIdp];
+  try {
+    const result = await c.client.callTool({
+      name: "deploy",
+      arguments: { project_name: "site", files: [{ path: "index.html", content: "test" }] },
+    });
+    assert.ok(result.isError);
+    assert.match(text(result), /google.+is enabled but no matching identity provider/);
+    assert.ok(!c.cf.calls.includes("UPLOAD"));
+    assert.deepEqual(c.cf.apps, []);
+  } finally {
     await c.close();
   }
 });

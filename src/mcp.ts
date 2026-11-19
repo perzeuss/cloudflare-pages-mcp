@@ -75,7 +75,11 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
       "Configured Access policy name, e.g. private_pages. Omit to use DEFAULT_ACCESS_POLICY_ID. Unknown names fail; callers cannot disable the default.",
     );
   const protect = async (name: string, id?: string) => {
-    if (id) await ensureProjectAccess(client, await client.getProject(name), id);
+    if (id)
+      await ensureProjectAccess(client, await client.getProject(name), id, {
+        methods: config.accessLoginMethods,
+        idpIds: config.accessIdpIds,
+      });
   };
 
   const server = new McpServer({
@@ -88,7 +92,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     {
       annotations: { title: "List configured Access policies", readOnlyHint: true },
       description:
-        "List operator-configured policy names and IDs plus the default policy ID. Login rules and credentials remain managed in Cloudflare.",
+        "List operator-configured policy names and IDs, the default policy ID and the login methods (google, otp) protected sites accept; null means unrestricted. Who may sign in (accounts) and credentials remain managed in Cloudflare.",
       inputSchema: {},
     },
     async () =>
@@ -96,6 +100,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
         JSON.stringify({
           policies: config.accessPolicies ?? {},
           default_access_policy_id: config.defaultAccessPolicyId ?? null,
+          login_methods: config.accessLoginMethods ?? null,
         }),
       ),
   );

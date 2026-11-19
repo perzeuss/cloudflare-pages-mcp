@@ -67,3 +67,53 @@ test("duplicate YAML names, aliases and oversized files are rejected", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("login methods are optional and unrestricted when unset", () => {
+  for (const env of [{}, { ACCESS_LOGIN_METHODS: "" }, { ACCESS_LOGIN_METHODS: "  " }]) {
+    const config = readAccessPolicies(env);
+    assert.equal(config.accessLoginMethods, undefined);
+    assert.equal(config.accessIdpIds, undefined);
+  }
+});
+
+test("login methods accept google and otp, ignore case, separators and duplicates", () => {
+  assert.deepEqual(readAccessPolicies({ ACCESS_LOGIN_METHODS: "google,otp" }).accessLoginMethods, [
+    "google",
+    "otp",
+  ]);
+  assert.deepEqual(
+    readAccessPolicies({ ACCESS_LOGIN_METHODS: " OTP  Google, otp " }).accessLoginMethods,
+    ["otp", "google"],
+  );
+  assert.deepEqual(readAccessPolicies({ ACCESS_LOGIN_METHODS: "otp" }).accessLoginMethods, ["otp"]);
+});
+
+test("unknown login methods fail closed without echoing the value", () => {
+  for (const value of ["github", "google,password", "totp"]) {
+    assert.throws(
+      () => readAccessPolicies({ ACCESS_LOGIN_METHODS: value }),
+      (error: Error) =>
+        /Unsupported ACCESS_LOGIN_METHODS/.test(error.message) && !error.message.includes(value),
+    );
+  }
+});
+
+test("identity provider IDs need their method and must be UUIDs", () => {
+  const config = readAccessPolicies({
+    ACCESS_LOGIN_METHODS: "google,otp",
+    ACCESS_GOOGLE_IDP_ID: id,
+    ACCESS_OTP_IDP_ID: other,
+  });
+  assert.deepEqual(config.accessIdpIds, { google: id, otp: other });
+  assert.throws(
+    () => readAccessPolicies({ ACCESS_LOGIN_METHODS: "otp", ACCESS_GOOGLE_IDP_ID: id }),
+    /not listed in ACCESS_LOGIN_METHODS/,
+  );
+  assert.throws(
+    () => readAccessPolicies({ ACCESS_GOOGLE_IDP_ID: id }),
+    /not listed in ACCESS_LOGIN_METHODS/,
+  );
+  assert.throws(() =>
+    readAccessPolicies({ ACCESS_LOGIN_METHODS: "google", ACCESS_GOOGLE_IDP_ID: "invalid" }),
+  );
+});

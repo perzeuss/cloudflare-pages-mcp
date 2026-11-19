@@ -1,3 +1,4 @@
+import type { LoginMethod, LoginMethodIdpIds } from "./access-policies.js";
 import type { CloudflareClient, PagesProject } from "./cloudflare.js";
 
 interface AccessApplication {
@@ -8,7 +9,81 @@ interface AccessApplication {
   self_hosted_domains?: string[];
   destinations?: { type?: string; uri?: string; overrides?: unknown[] }[];
   policies?: (string | { id?: string })[];
+  /** Identity providers offered at login. Empty/absent means every provider in the account. */
+  allowed_idps?: string[];
   options_preflight_bypass?: boolean;
+}
+
+interface IdentityProvider {
+  id: string;
+  name?: string;
+  type?: string;
+}
+
+/** Login methods an application may be restricted to (see ACCESS_LOGIN_METHODS). */
+export interface AccessLoginOptions {
+  methods?: LoginMethod[];
+  /** Explicit identity provider IDs; only needed if detection by type is ambiguous. */
+  idpIds?: LoginMethodIdpIds;
+}
+
+/** Cloudflare identity provider types behind each login method. */
+const IDP_TYPES: Record<LoginMethod, string[]> = {
+  google: ["google", "google-apps"],
+  otp: ["onetimepin"],
+};
+
+/**
+ * Translate the allowed login methods into identity provider IDs. The providers
+ * themselves (including Google client credentials) stay configured in
+ * Cloudflare Zero Trust; this only selects among them. Runs before anything is
+ * created so a missing or ambiguous provider aborts the whole operation.
+ */
+export async function resolveLoginIdps(
+  client: CloudflareClient,
+  methods: LoginMethod[],
+  overrides: LoginMethodIdpIds = {},
+): Promise<string[]> {
+  const providers: IdentityProvider[] = [];
+  for (let page = 1; ; page++) {
+    const batch = await client.accessRequest<IdentityProvider[]>(
+      `/identity_providers?per_page=100&page=${page}`,
+    );
+    providers.push(...batch);
+    if (batch.length < 100) break;
+    if (page >= 1000) throw new Error("Identity provider listing exceeded the safety limit.");
+  }
+
+  const ids = methods.map((method) => {
+    const override = overrides[method];
+    const variable = `ACCESS_${method.toUpperCase()}_IDP_ID`;
+    if (override) {
+      const found = providers.find((p) => p.id === override);
+      if (!found || !IDP_TYPES[method].includes(found.type ?? "")) {
+        throw new Error(
+          `${variable} does not match a "${method}" identity provider in this Cloudflare account.`,
+        );
+      }
+      return found.id;
+    }
+    const matches = providers.filter((p) => IDP_TYPES[method].includes(p.type ?? ""));
+    if (matches.length === 0) {
+      throw new Error(
+        `Login method "${method}" is enabled but no matching identity provider exists. Add it in Cloudflare Zero Trust (Settings > Authentication) or remove it from ACCESS_LOGIN_METHODS.`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Several identity providers match login method "${method}". Set ${variable} to the one to use.`,
+      );
+    }
+    return matches[0]!.id;
+  });
+  return [...new Set(ids)];
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && b.every((id) => a.includes(id));
 }
 
 function destinations(app: AccessApplication): string[] {
@@ -37,6 +112,7 @@ async function verify(
   app: AccessApplication,
   hostname: string,
   policyId: string,
+  allowedIdps?: string[],
 ): Promise<void> {
   const hosts = destinations(app);
   const policies = app.policies?.map((p) => (typeof p === "string" ? p : p.id));
@@ -53,6 +129,13 @@ async function verify(
   ) {
     throw new Error(
       `Access configuration for ${hostname} does not exclusively enforce the selected policy. Configure it in Cloudflare before retrying.`,
+    );
+  }
+  // Login methods are enforced on the application, not in each policy. An
+  // existing application is never edited, so a mismatch is reported instead.
+  if (allowedIdps && !sameSet(app.allowed_idps ?? [], allowedIdps)) {
+    throw new Error(
+      `Access application for ${hostname} does not restrict login to the methods in ACCESS_LOGIN_METHODS. Set its allowed identity providers in Cloudflare before retrying.`,
     );
   }
   // Additional machine-access rules are operator-owned. Accept only reusable
@@ -76,6 +159,7 @@ export async function ensureProjectAccess(
   client: CloudflareClient,
   project: PagesProject,
   policyId: string,
+  login: AccessLoginOptions = {},
 ): Promise<string[]> {
   const policy = await client.accessRequest<{ id: string; decision: string; reusable?: boolean }>(
     `/policies/${encodeURIComponent(policyId)}`,
@@ -83,6 +167,12 @@ export async function ensureProjectAccess(
   if (policy.id !== policyId || policy.decision !== "allow" || policy.reusable !== true) {
     throw new Error("The selected Access policy must be a reusable Allow policy in this account.");
   }
+
+  // Resolve the identity providers up front: misconfiguration must abort before
+  // any Access application is created or any asset is uploaded.
+  const allowedIdps = login.methods?.length
+    ? await resolveLoginIdps(client, login.methods, login.idpIds)
+    : undefined;
 
   const primary = project.subdomain || `${project.name}.pages.dev`;
   const hosts = [...new Set([primary, `*.${primary}`, ...(project.domains ?? [])])];
@@ -114,7 +204,7 @@ export async function ensureProjectAccess(
       const detail = await client.accessRequest<AccessApplication>(
         `/apps/${encodeURIComponent(exact[0]!.id)}`,
       );
-      await verify(client, detail, hostname, policyId);
+      await verify(client, detail, hostname, policyId, allowedIdps);
       continue;
     }
     const created = await client.accessRequest<AccessApplication>("/apps", {
@@ -125,6 +215,7 @@ export async function ensureProjectAccess(
         domain: hostname,
         session_duration: "8h",
         policies: [{ id: policyId, precedence: 1 }],
+        ...(allowedIdps ? { allowed_idps: allowedIdps } : {}),
       }),
     });
     if (!created.id)
@@ -132,7 +223,7 @@ export async function ensureProjectAccess(
     const detail = await client.accessRequest<AccessApplication>(
       `/apps/${encodeURIComponent(created.id)}`,
     );
-    await verify(client, detail, hostname, policyId);
+    await verify(client, detail, hostname, policyId, allowedIdps);
   }
   return hosts;
 }
