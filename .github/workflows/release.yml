@@ -35,12 +35,16 @@ jobs:
       - name: Run semantic-release
         id: release
         run: |
-          before=$(git describe --tags --abbrev=0 2>/dev/null || echo none)
+          # Detect the release by the tag it created, not by `git describe`:
+          # describe reports the nearest tag and returned the old one after a
+          # release, which skipped the image build.
+          before=$(git tag --list 'v*' | sort)
           npx semantic-release
-          after=$(git describe --tags --abbrev=0 2>/dev/null || echo none)
-          if [ "$after" != "$before" ] && [ "$after" != "none" ]; then
-            echo "version=${after#v}" >> "$GITHUB_OUTPUT"
-            echo "Released ${after}"
+          git fetch --quiet --force --tags origin
+          created=$(comm -13 <(echo "$before") <(git tag --list 'v*' | sort) | sort -V | tail -n 1)
+          if [ -n "$created" ]; then
+            echo "version=${created#v}" >> "$GITHUB_OUTPUT"
+            echo "Released ${created}"
           else
             echo "No new release."
           fi
