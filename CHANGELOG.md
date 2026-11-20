@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.0.0...v1.1.0) (2026-11-20)
+
+
+### Features
+
+* öffentliche eigene Domains pro Projekt und Tool add_custom_domain ([#70](https://github.com/perzeuss/cloudflare-pages-mcp/issues/70)) ([c904d28](https://github.com/perzeuss/cloudflare-pages-mcp/commit/c904d286342692bb4e961eeb8691e55adb1cbe20))
+
 # 1.0.0 (2026-11-20)
 
 
