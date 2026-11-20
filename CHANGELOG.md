@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.1.0...v1.1.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **ci:** neues Release am erzeugten Tag erkennen, damit das Image gebaut wird ([#71](https://github.com/perzeuss/cloudflare-pages-mcp/issues/71)) ([cc6319b](https://github.com/perzeuss/cloudflare-pages-mcp/commit/cc6319bcafcabc1d9353b8ed0ba942c90a09b693))
+
 # [1.1.0](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.0.0...v1.1.0) (2026-11-20)
 
 
