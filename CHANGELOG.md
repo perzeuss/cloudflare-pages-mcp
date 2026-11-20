@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.1.1...v1.1.2) (2026-11-20)
+
+
+### Bug Fixes
+
+* _headers, _redirects und _routes.json als Deployment-Felder senden ([#72](https://github.com/perzeuss/cloudflare-pages-mcp/issues/72)) ([338c327](https://github.com/perzeuss/cloudflare-pages-mcp/commit/338c3271b32f7eec97d523b023d31920d7b4e508))
+
 ## [1.1.1](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.1.0...v1.1.1) (2026-11-20)
 
 
