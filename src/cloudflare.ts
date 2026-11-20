@@ -10,6 +10,14 @@ const MAX_BUCKET_FILES = 50;
 const MAX_BUCKET_BYTES = 40 * 1024 * 1024; // base64 payload budget per request
 const UPLOAD_RETRIES = 3;
 
+/**
+ * Root files that configure the Pages project instead of being served. The
+ * Direct Upload API takes them as separate form fields of the deployment (as
+ * Wrangler sends them); uploaded as assets they are served as plain files and
+ * have no effect.
+ */
+const CONFIG_FILES = ["/_headers", "/_redirects", "/_routes.json"] as const;
+
 interface CfResponse<T> {
   success: boolean;
   result: T;
@@ -243,10 +251,15 @@ export class CloudflareClient {
     projectName: string,
     manifest: Record<string, string>,
     branch?: string,
+    config: DeployFile[] = [],
   ): Promise<Deployment> {
     const form = new FormData();
     form.set("manifest", JSON.stringify(manifest));
     if (branch) form.set("branch", branch);
+    for (const file of config) {
+      const name = file.path.slice(1);
+      form.set(name, new File([new Uint8Array(file.contents)], name));
+    }
     return this.json<Deployment>(
       this.accountPath(`/${encodeURIComponent(projectName)}/deployments`),
       { method: "POST", body: form },
@@ -265,7 +278,9 @@ export class CloudflareClient {
     // Map each unique hash to its base64 payload; build the path→hash manifest.
     const manifest: Record<string, string> = {};
     const payloads = new Map<string, AssetPayload>();
-    for (const file of opts.files) {
+    const isConfig = (file: DeployFile) => (CONFIG_FILES as readonly string[]).includes(file.path);
+    const config = opts.files.filter(isConfig);
+    for (const file of opts.files.filter((f) => !isConfig(f))) {
       const hash = hashContent(file.contents, file.path);
       manifest[file.path] = hash;
       if (!payloads.has(hash)) {
@@ -288,7 +303,7 @@ export class CloudflareClient {
     }
 
     await this.upsertHashes(jwt, allHashes);
-    const deployment = await this.createDeployment(opts.projectName, manifest, opts.branch);
+    const deployment = await this.createDeployment(opts.projectName, manifest, opts.branch, config);
 
     return { deployment, uploaded: toUpload.length, total: allHashes.length };
   }

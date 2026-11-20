@@ -121,6 +121,66 @@ describe("CloudflareClient API calls", () => {
     assert.ok(calls.some((c) => c.endsWith("/deployments")));
   });
 
+  it("sends _headers, _redirects and _routes.json as deployment fields, not as assets", async () => {
+    let form: FormData | undefined;
+    let checked: string[] = [];
+    globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+      const path = url.replace("https://api.cloudflare.com/client/v4", "");
+      if (path.endsWith("/upload-token")) return ok({ jwt: "jwt" });
+      if (path === "/pages/assets/check-missing") {
+        checked = (JSON.parse(String(init.body)) as { hashes: string[] }).hashes;
+        return ok([]);
+      }
+      if (path === "/pages/assets/upsert-hashes") return ok(true);
+      if (path.endsWith("/deployments")) {
+        form = init.body as FormData;
+        return ok({ id: "d", url: "https://x.pages.dev" });
+      }
+      throw new Error(`unexpected ${path}`);
+    }) as unknown as typeof fetch;
+
+    const cf = new CloudflareClient("acct", "token");
+    const { total } = await cf.deploy({
+      projectName: "site",
+      files: [
+        { path: "/index.html", contents: Buffer.from("hi") },
+        { path: "/_headers", contents: Buffer.from("/*\n  X-Frame-Options: DENY\n") },
+        { path: "/_redirects", contents: Buffer.from("/docs /en/docs/ 301\n") },
+        { path: "/_routes.json", contents: Buffer.from('{"version":1}') },
+        { path: "/sub/_headers", contents: Buffer.from("not config") },
+      ],
+    });
+
+    assert.equal(total, 2);
+    assert.equal(checked.length, 2);
+    const manifest = JSON.parse(String(form!.get("manifest"))) as Record<string, string>;
+    assert.deepEqual(Object.keys(manifest).sort(), ["/index.html", "/sub/_headers"]);
+    assert.equal(await (form!.get("_headers") as File).text(), "/*\n  X-Frame-Options: DENY\n");
+    assert.equal(await (form!.get("_redirects") as File).text(), "/docs /en/docs/ 301\n");
+    assert.equal(await (form!.get("_routes.json") as File).text(), '{"version":1}');
+  });
+
+  it("omits the config fields when the site has none", async () => {
+    let form: FormData | undefined;
+    globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+      const path = url.replace("https://api.cloudflare.com/client/v4", "");
+      if (path.endsWith("/upload-token")) return ok({ jwt: "jwt" });
+      if (path === "/pages/assets/check-missing") return ok([]);
+      if (path === "/pages/assets/upsert-hashes") return ok(true);
+      if (path.endsWith("/deployments")) {
+        form = init.body as FormData;
+        return ok({ id: "d", url: "https://x.pages.dev" });
+      }
+      throw new Error(`unexpected ${path}`);
+    }) as unknown as typeof fetch;
+    const cf = new CloudflareClient("acct", "token");
+    await cf.deploy({
+      projectName: "site",
+      files: [{ path: "/index.html", contents: Buffer.from("hi") }],
+    });
+    assert.deepEqual([...form!.keys()], ["manifest"]);
+  });
+
   it("skips the upload call when no assets are missing", async () => {
     let uploadCalled = false;
     globalThis.fetch = (async (url: string) => {
