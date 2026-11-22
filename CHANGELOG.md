@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.1.2...v1.2.0) (2026-11-22)
+
+
+### Features
+
+* upload Pages advanced-mode worker (_worker.js) and set Workers AI bindings ([#75](https://github.com/perzeuss/cloudflare-pages-mcp/issues/75)) ([eb19de1](https://github.com/perzeuss/cloudflare-pages-mcp/commit/eb19de1d0c7a21aa0ef85ae380ac38c87eb563c0))
+
 ## Unreleased
 
 - Deploy a root `_worker.js` as a Pages advanced-mode ES module with optional `_routes.json` routing.
