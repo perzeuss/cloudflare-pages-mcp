@@ -1,3 +1,8 @@
+## Unreleased
+
+- Deploy a root `_worker.js` as a Pages advanced-mode ES module with optional `_routes.json` routing.
+- Configure production and preview Workers AI bindings with `set_project_bindings` and inspect them with `get_project`.
+
 ## [1.1.2](https://github.com/perzeuss/cloudflare-pages-mcp/compare/v1.1.1...v1.1.2) (2026-11-20)
 
 

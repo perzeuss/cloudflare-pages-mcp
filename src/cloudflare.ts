@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.js";
 import { hashContent } from "./hash.js";
 import { contentTypeFor } from "./mime.js";
-import type { DeployFile } from "./files.js";
+import { MAX_FILE_SIZE, type DeployFile } from "./files.js";
 
 const API_BASE = "https://api.cloudflare.com/client/v4";
 
@@ -16,7 +16,9 @@ const UPLOAD_RETRIES = 3;
  * Wrangler sends them); uploaded as assets they are served as plain files and
  * have no effect.
  */
-const CONFIG_FILES = ["/_headers", "/_redirects", "/_routes.json"] as const;
+const CONFIG_FILES = new Set(["/_headers", "/_redirects", "/_routes.json"]);
+const WORKER_PATH = "/_worker.js";
+export const aiBindingNamePattern = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 interface CfResponse<T> {
   success: boolean;
@@ -31,6 +33,9 @@ export interface PagesProject {
   domains: string[];
   production_branch?: string;
   created_on?: string;
+  deployment_configs?: Partial<
+    Record<"production" | "preview", { ai_bindings?: Record<string, unknown> }>
+  >;
 }
 
 export interface PagesDomain {
@@ -148,6 +153,25 @@ export class CloudflareClient {
     });
   }
 
+  async setProjectBindings(
+    name: string,
+    aiBindings: string[],
+    includePreview = false,
+  ): Promise<PagesProject> {
+    if (!aiBindings.length || aiBindings.some((binding) => !aiBindingNamePattern.test(binding))) {
+      throw new CloudflareError(
+        "Provide at least one AI binding name matching ^[A-Z][A-Z0-9_]{0,63}$.",
+      );
+    }
+    const production = { ai_bindings: Object.fromEntries(aiBindings.map((name) => [name, {}])) };
+    return this.json<PagesProject>(this.accountPath(`/${encodeURIComponent(name)}`), {
+      method: "PATCH",
+      body: JSON.stringify({
+        deployment_configs: { production, ...(includePreview && { preview: production }) },
+      }),
+    });
+  }
+
   /** Attach a custom domain to a Pages project. */
   async addProjectDomain(project: string, domain: string): Promise<PagesDomain> {
     return this.json<PagesDomain>(this.accountPath(`/${encodeURIComponent(project)}/domains`), {
@@ -252,6 +276,7 @@ export class CloudflareClient {
     manifest: Record<string, string>,
     branch?: string,
     config: DeployFile[] = [],
+    worker?: DeployFile,
   ): Promise<Deployment> {
     const form = new FormData();
     form.set("manifest", JSON.stringify(manifest));
@@ -259,6 +284,21 @@ export class CloudflareClient {
     for (const file of config) {
       const name = file.path.slice(1);
       form.set(name, new File([new Uint8Array(file.contents)], name));
+    }
+    if (worker) {
+      // Wrangler serializes the module form into the deployment's _worker.bundle file:
+      // https://github.com/cloudflare/workers-sdk/blob/main/packages/wrangler/src/api/pages/deploy.ts#L359-L368
+      // https://github.com/cloudflare/workers-sdk/blob/main/packages/wrangler/src/api/pages/create-worker-bundle-contents.ts#L16-L28
+      const name = WORKER_PATH.slice(1);
+      const bundle = new FormData();
+      bundle.set("metadata", JSON.stringify({ main_module: name }));
+      bundle.set(
+        name,
+        new File([new Uint8Array(worker.contents)], name, {
+          type: "application/javascript+module",
+        }),
+      );
+      form.set("_worker.bundle", new File([await new Response(bundle).blob()], "_worker.bundle"));
     }
     return this.json<Deployment>(
       this.accountPath(`/${encodeURIComponent(projectName)}/deployments`),
@@ -278,9 +318,25 @@ export class CloudflareClient {
     // Map each unique hash to its base64 payload; build the path→hash manifest.
     const manifest: Record<string, string> = {};
     const payloads = new Map<string, AssetPayload>();
-    const isConfig = (file: DeployFile) => (CONFIG_FILES as readonly string[]).includes(file.path);
-    const config = opts.files.filter(isConfig);
-    for (const file of opts.files.filter((f) => !isConfig(f))) {
+    const config: DeployFile[] = [];
+    let worker: DeployFile | undefined;
+    for (const file of opts.files) {
+      if (file.path === WORKER_PATH) {
+        if (file.contents.byteLength > MAX_FILE_SIZE) {
+          throw new CloudflareError(`Worker ${WORKER_PATH} exceeds the 25 MiB per-file limit.`);
+        }
+        worker = file;
+        continue;
+      }
+      if (file.path.startsWith(WORKER_PATH + "/")) {
+        throw new CloudflareError(
+          "Bundle the _worker.js directory into a single /_worker.js ES module.",
+        );
+      }
+      if (CONFIG_FILES.has(file.path)) {
+        config.push(file);
+        continue;
+      }
       const hash = hashContent(file.contents, file.path);
       manifest[file.path] = hash;
       if (!payloads.has(hash)) {
@@ -294,18 +350,25 @@ export class CloudflareClient {
     }
 
     const allHashes = [...payloads.keys()];
-    const jwt = await this.getUploadToken(opts.projectName);
-    const missing = new Set(await this.checkMissing(jwt, allHashes));
-
-    const toUpload = allHashes.filter((h) => missing.has(h)).map((h) => payloads.get(h)!);
-    for (const bucket of bucketize(toUpload)) {
-      await this.uploadBucket(jwt, bucket);
+    let uploaded = 0;
+    if (allHashes.length) {
+      const jwt = await this.getUploadToken(opts.projectName);
+      const missing = new Set(await this.checkMissing(jwt, allHashes));
+      const toUpload = allHashes.filter((h) => missing.has(h)).map((h) => payloads.get(h)!);
+      for (const bucket of bucketize(toUpload)) {
+        await this.uploadBucket(jwt, bucket);
+      }
+      await this.upsertHashes(jwt, allHashes);
+      uploaded = toUpload.length;
     }
-
-    await this.upsertHashes(jwt, allHashes);
-    const deployment = await this.createDeployment(opts.projectName, manifest, opts.branch, config);
-
-    return { deployment, uploaded: toUpload.length, total: allHashes.length };
+    const deployment = await this.createDeployment(
+      opts.projectName,
+      manifest,
+      opts.branch,
+      config,
+      worker,
+    );
+    return { deployment, uploaded, total: allHashes.length };
   }
 }
 

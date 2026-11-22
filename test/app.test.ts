@@ -243,6 +243,7 @@ test("buildMcpServer registers the Cloudflare Pages tools", async () => {
     "list_projects",
     "publish_deployment",
     "read_page",
+    "set_project_bindings",
   ]);
 
   await client.close();
@@ -269,6 +270,75 @@ async function connectMcp(config: Config) {
 function toolText(res: Awaited<ReturnType<Client["callTool"]>>): string {
   return (res.content as { type: string; text: string }[]).map((c) => c.text).join("\n");
 }
+
+for (const staged of [false, true]) {
+  test(`${staged ? "staged" : "inline"} deploy publishes a worker-only preview`, async (t) => {
+    const { client, staging, close } = await connectMcp(baseConfig);
+    t.after(close);
+    const source = "export default { fetch() { return new Response('ok'); } };";
+    const args = { project_name: "site", create_if_missing: false, branch: "test-preview" };
+    const fetchMock = t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+      assert.ok(url.endsWith("/pages/projects/site/deployments"));
+      assert.ok(init.body instanceof FormData);
+      assert.equal(init.body.get("branch"), args.branch);
+      assert.deepEqual(JSON.parse(String(init.body.get("manifest"))), {});
+      assert.ok(init.body.get("_worker.bundle") instanceof File);
+      return Response.json({
+        success: true,
+        result: { id: "deployment", url: "https://abc.site.pages.dev" },
+      });
+    });
+    let result;
+    if (staged) {
+      const start = await client.callTool({ name: "create_deployment", arguments: args });
+      const id = toolText(start).match(/deploy_id: ([a-f0-9-]+)/)![1]!;
+      staging.addFiles(id, [{ path: "/_worker.js", contents: Buffer.from(source) }]);
+      result = await client.callTool({ name: "publish_deployment", arguments: { deploy_id: id } });
+    } else {
+      result = await client.callTool({
+        name: "deploy",
+        arguments: { ...args, files: [{ path: "./_worker.js", content: source }] },
+      });
+    }
+    assert.match(toolText(result), /0\/0 assets newly uploaded/);
+    assert.equal(fetchMock.mock.callCount(), 1);
+  });
+}
+
+test("set_project_bindings and get_project report the returned AI bindings by environment", async (t) => {
+  const { client, close } = await connectMcp(baseConfig);
+  t.after(close);
+  const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+    Response.json({
+      success: true,
+      result: {
+        name: "site",
+        deployment_configs: {
+          production: { ai_bindings: { AI: {} }, env_vars: { INTERNAL: { value: "private" } } },
+          preview: { ai_bindings: { PREVIEW_AI: {} } },
+        },
+      },
+    }),
+  );
+  const invalid = await client.callTool({
+    name: "set_project_bindings",
+    arguments: { project_name: "site", ai_bindings: ["bad-name"] },
+  });
+  assert.equal(invalid.isError, true);
+  assert.equal(fetchMock.mock.callCount(), 0);
+
+  const updated = await client.callTool({
+    name: "set_project_bindings",
+    arguments: { project_name: "site", ai_bindings: ["AI"] },
+  });
+  const expected = { production: ["AI"], preview: ["PREVIEW_AI"] };
+  assert.deepEqual(JSON.parse(toolText(updated)), expected);
+  const readBack = toolText(
+    await client.callTool({ name: "get_project", arguments: { name: "site" } }),
+  );
+  assert.ok(readBack.includes(JSON.stringify(expected)));
+  assert.doesNotMatch(readBack, /INTERNAL|private/);
+});
 
 test("create_upload_url returns one signed URL per path in a single call", async () => {
   const { client, staging, close } = await connectMcp({

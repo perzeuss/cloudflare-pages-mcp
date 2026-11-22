@@ -14,7 +14,12 @@ import { hostnamePattern, publicDomainsOf, resolveAccessPolicy } from "./access-
 import { accessAppsCovering, ensureProjectAccess } from "./access.js";
 
 import type { Config } from "./config.js";
-import { CloudflareClient, type DnsRecord } from "./cloudflare.js";
+import {
+  aiBindingNamePattern,
+  CloudflareClient,
+  type DnsRecord,
+  type PagesProject,
+} from "./cloudflare.js";
 import { collectFiles, normalizePath } from "./files.js";
 import { signToken } from "./security.js";
 import { StagingStore } from "./staging.js";
@@ -62,6 +67,13 @@ function liveUrls(project: { name: string; subdomain?: string }, deploymentUrl?:
   if (deploymentUrl) lines.push(`Deployment URL: ${deploymentUrl}`);
   lines.push(`Production URL: https://${project.subdomain || `${project.name}.pages.dev`}`);
   return lines.join("\n");
+}
+
+function projectAiBindings(project: PagesProject) {
+  return {
+    production: Object.keys(project.deployment_configs?.production?.ai_bindings ?? {}),
+    preview: Object.keys(project.deployment_configs?.preview?.ai_bindings ?? {}),
+  };
 }
 
 export function buildMcpServer(ctx: ServerContext): McpServer {
@@ -152,7 +164,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     {
       annotations: { title: "Deploy files to Cloudflare Pages" },
       description:
-        "Upload files and create a deployment in a single call, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs. NOTE: a single tool call is bounded by the model's output size — for large sites (many files or thousands of lines) use create_deployment + create_upload_url + publish_deployment instead.",
+        "Upload files and create a deployment in a single call, publishing a live site. Provide the complete set of site files inline via `files` (e.g. Claude-generated HTML/CSS/JS, and binary assets as base64). Include a single root _worker.js ES module for advanced mode and optional _routes.json for routing. Creates the project automatically if it does not exist (unless create_if_missing is false). Returns the live URLs. NOTE: a single tool call is bounded by the model's output size — for large sites (many files or thousands of lines) use create_deployment + create_upload_url + publish_deployment instead.",
       inputSchema: {
         project_name: z.string().describe("Target Pages project name."),
         access_policy: policyInput,
@@ -364,7 +376,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
     {
       annotations: { title: "Publish a staged deployment" },
       description:
-        "Upload all files staged under deploy_id and publish them as a single Cloudflare Pages deployment. Auto-creates the project if needed (per create_deployment's setting). Consumes the staged deployment. Returns the live URLs.",
+        "Upload all files staged under deploy_id and publish them as a single Cloudflare Pages deployment. A root _worker.js runs as an advanced-mode ES module with optional _routes.json. Auto-creates the project if needed (per create_deployment's setting). Consumes the staged deployment. Returns the live URLs.",
       inputSchema: {
         deploy_id: z.string().describe("The deploy_id returned by create_deployment."),
       },
@@ -438,10 +450,40 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
   );
 
   server.registerTool(
+    "set_project_bindings",
+    {
+      annotations: { title: "Set Workers AI bindings for a Pages project" },
+      description:
+        "Set Workers AI binding names on an existing project's production config. Set include_preview to apply the same names to preview. Returns configured names by environment. Deploy again for changes to take effect.",
+      inputSchema: {
+        project_name: z.string().min(1).describe("Existing Pages project name."),
+        ai_bindings: z
+          .array(z.string().regex(aiBindingNamePattern))
+          .min(1)
+          .describe('Workers AI binding names, e.g. ["AI"].'),
+        include_preview: z
+          .boolean()
+          .optional()
+          .describe("Also configure preview deployments. Default: false."),
+      },
+    },
+    async (args) =>
+      run(async () => {
+        const project = await client.setProjectBindings(
+          args.project_name,
+          args.ai_bindings,
+          args.include_preview,
+        );
+        return JSON.stringify(projectAiBindings(project));
+      }),
+  );
+
+  server.registerTool(
     "get_project",
     {
       annotations: { title: "Get Cloudflare Pages project" },
-      description: "Get details for a single Cloudflare Pages project, including its live domains.",
+      description:
+        "Get details for a single Cloudflare Pages project, including its live domains and Workers AI binding names by environment.",
       inputSchema: {
         name: z.string().describe("Project name."),
       },
@@ -455,6 +497,7 @@ export function buildMcpServer(ctx: ServerContext): McpServer {
           liveUrls(p),
           `Custom domains: ${domains}`,
           `Production branch: ${p.production_branch ?? "main"}`,
+          `Workers AI bindings: ${JSON.stringify(projectAiBindings(p))}`,
         ].join("\n");
       }),
   );
