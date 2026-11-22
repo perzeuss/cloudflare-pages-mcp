@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
 import { CloudflareClient, CloudflareError } from "../src/cloudflare.js";
-import type { DeployFile } from "../src/files.js";
+import { MAX_FILE_SIZE, type DeployFile } from "../src/files.js";
 
 const realFetch = globalThis.fetch;
 
@@ -86,6 +86,32 @@ describe("CloudflareClient API calls", () => {
     assert.equal(await cf.projectExists("site"), true);
   });
 
+  for (const includePreview of [false, true]) {
+    it(`patches only AI binding maps (includePreview=${includePreview})`, async () => {
+      const cf = new CloudflareClient("acct", "token");
+      const ai = { ai_bindings: { AI: {}, SEARCH_2: {} } };
+      const expected = {
+        deployment_configs: includePreview ? { production: ai, preview: ai } : { production: ai },
+      };
+      globalThis.fetch = async (url, init) => {
+        assert.equal(url, "https://api.cloudflare.com/client/v4/accounts/acct/pages/projects/site");
+        assert.equal(init?.method, "PATCH");
+        assert.deepEqual(JSON.parse(String(init.body)), expected);
+        return ok({ ...expected, name: "site" });
+      };
+      const result = await cf.setProjectBindings("site", ["AI", "SEARCH_2"], includePreview);
+      assert.deepEqual(result.deployment_configs, expected.deployment_configs);
+    });
+  }
+
+  it("rejects invalid AI binding names before making a request", async () => {
+    globalThis.fetch = async () => assert.fail("unexpected API request");
+    const cf = new CloudflareClient("acct", "token");
+    for (const name of ["ai", "1AI", "_AI", "AI-2", "", "A".repeat(65)]) {
+      await assert.rejects(cf.setProjectBindings("site", ["AI", name]), /AI binding name/);
+    }
+  });
+
   it("runs the full deploy flow, uploading only missing assets", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
@@ -121,7 +147,9 @@ describe("CloudflareClient API calls", () => {
     assert.ok(calls.some((c) => c.endsWith("/deployments")));
   });
 
-  it("sends _headers, _redirects and _routes.json as deployment fields, not as assets", async () => {
+  it("sends the ES module bundle and routing configuration separately from assets", async () => {
+    const source = "export default { fetch(request, env) { return env.ASSETS.fetch(request); } };";
+    const routes = '{"version":1,"include":["/api/*"],"exclude":[]}';
     let form: FormData | undefined;
     let checked: string[] = [];
     globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
@@ -133,7 +161,7 @@ describe("CloudflareClient API calls", () => {
       }
       if (path === "/pages/assets/upsert-hashes") return ok(true);
       if (path.endsWith("/deployments")) {
-        form = init.body as FormData;
+        form = await new Response(init.body).formData();
         return ok({ id: "d", url: "https://x.pages.dev" });
       }
       throw new Error(`unexpected ${path}`);
@@ -146,18 +174,58 @@ describe("CloudflareClient API calls", () => {
         { path: "/index.html", contents: Buffer.from("hi") },
         { path: "/_headers", contents: Buffer.from("/*\n  X-Frame-Options: DENY\n") },
         { path: "/_redirects", contents: Buffer.from("/docs /en/docs/ 301\n") },
-        { path: "/_routes.json", contents: Buffer.from('{"version":1}') },
+        { path: "/_worker.js", contents: Buffer.from(source) },
+        { path: "/_routes.json", contents: Buffer.from(routes) },
         { path: "/sub/_headers", contents: Buffer.from("not config") },
       ],
     });
 
     assert.equal(total, 2);
-    assert.equal(checked.length, 2);
     const manifest = JSON.parse(String(form!.get("manifest"))) as Record<string, string>;
     assert.deepEqual(Object.keys(manifest).sort(), ["/index.html", "/sub/_headers"]);
+    assert.deepEqual(checked.sort(), Object.values(manifest).sort());
     assert.equal(await (form!.get("_headers") as File).text(), "/*\n  X-Frame-Options: DENY\n");
     assert.equal(await (form!.get("_redirects") as File).text(), "/docs /en/docs/ 301\n");
-    assert.equal(await (form!.get("_routes.json") as File).text(), '{"version":1}');
+    assert.equal(await (form!.get("_routes.json") as File).text(), routes);
+    assert.equal(form!.has("_worker.js"), false);
+    const bundle = form!.get("_worker.bundle");
+    assert.ok(bundle instanceof File);
+    assert.equal(bundle.name, "_worker.bundle");
+    // Wrangler's outer file carries the inner MIME boundary in its first line.
+    const boundary = (await bundle.text()).split("\r\n")[0]!.slice(2);
+    const parts = await new Response(bundle, {
+      headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+    }).formData();
+    assert.deepEqual(JSON.parse(String(parts.get("metadata"))), { main_module: "_worker.js" });
+    const entry = parts.get("_worker.js");
+    assert.ok(entry instanceof File);
+    assert.equal(entry.name, "_worker.js");
+    assert.equal(entry.type, "application/javascript+module");
+    assert.equal(await entry.text(), source);
+  });
+
+  it("rejects an oversized worker before asset upload", async () => {
+    globalThis.fetch = async () => assert.fail("unexpected API request");
+    const cf = new CloudflareClient("acct", "token");
+    await assert.rejects(
+      cf.deploy({
+        projectName: "site",
+        files: [{ path: "/_worker.js", contents: Buffer.alloc(MAX_FILE_SIZE + 1) }],
+      }),
+      /_worker\.js.*25 MiB/,
+    );
+  });
+
+  it("rejects a worker directory before its modules reach asset upload", async () => {
+    globalThis.fetch = async () => assert.fail("unexpected API request");
+    const cf = new CloudflareClient("acct", "token");
+    await assert.rejects(
+      cf.deploy({
+        projectName: "site",
+        files: [{ path: "/_worker.js/index.js", contents: Buffer.from("export default {}") }],
+      }),
+      /single .* ES module/,
+    );
   });
 
   it("omits the config fields when the site has none", async () => {

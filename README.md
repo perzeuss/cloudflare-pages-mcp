@@ -14,6 +14,7 @@ registration) gated behind a single shared password.
 
 - [Tools](#tools)
 - [Deploying a site from disk](#deploying-a-site-from-disk-recommended)
+- [Deploying a worker (Pages advanced mode)](#deploying-a-worker-pages-advanced-mode)
 - [Browser & sandbox uploads (CORS)](#browser-and-sandbox-uploads-cors)
 - [Endpoints](#endpoints) · [Configuration](#configuration)
 - [Quickstart (Docker)](#quickstart-docker) · [Quickstart (local)](#quickstart-local)
@@ -35,7 +36,8 @@ registration) gated behind a single shared password.
   inline through the model is no longer supported for staged deployments; use
   `create_upload_url` to upload from disk instead.
 - `list_projects` — list existing projects.
-- `get_project` — fetch one project's details.
+- `get_project` — fetch one project's details, including Workers AI binding names by environment.
+- `set_project_bindings` — configure Workers AI names for production and optionally preview.
 - `delete_project` — delete a project.
 
 ### Deploying a site from disk (recommended)
@@ -62,6 +64,40 @@ through the model:
 
 4. `publish_deployment` → publishes everything as one deployment and returns the
    live URL.
+
+### Deploying a worker (Pages advanced mode)
+
+Place a single ES module named `_worker.js` at the root of your site output.
+Bundle local imports into that file before upload. The connector accepts up to
+25 MiB of worker source. Include the worker alongside your assets in inline
+`deploy` or in the signed upload workflow. The connector sends the worker in
+the deployment's private `_worker.bundle` part and excludes it from the asset manifest.
+
+To run the worker only for `/api/*`, include this root `_routes.json`. Pages
+serves other paths directly from the site's static assets.
+
+```json
+{ "version": 1, "include": ["/api/*"], "exclude": [] }
+```
+
+For a worker that uses `env.AI`, call `set_project_bindings` on the existing
+project before deploying. For a new site, call `create_project` first.
+
+```json
+{ "project_name": "my-site", "ai_bindings": ["AI"], "include_preview": true }
+```
+
+Omit `include_preview` to configure production only. Each name must match
+`^[A-Z][A-Z0-9_]{0,63}$`. Both the tool result and `get_project` show the binding
+names returned for each environment. Bindings are project settings and take
+effect on the next deployment. The worker inherits the project's compatibility
+settings. [Cloudflare Pages bindings](https://developers.cloudflare.com/pages/functions/bindings/#workers-ai)
+
+A search handler can embed a query with
+`await env.AI.run("@cf/baai/bge-m3", { text: [query] })`. For routed requests
+that the handler passes through, return `env.ASSETS.fetch(request)`.
+[Model usage](https://developers.cloudflare.com/workers-ai/models/bge-m3/)
+· [Pages advanced mode](https://developers.cloudflare.com/pages/functions/advanced-mode/)
 
 ### Use it from an agent (copy-paste prompt)
 

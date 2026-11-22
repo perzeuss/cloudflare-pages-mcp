@@ -60,6 +60,9 @@ work (it needs a reachable host to build the URLs).
    `deploy_id` and a `paths` array of all site-relative paths
    (e.g. `["index.html", "styles.css", "assets/hero.jpg"]`). It returns one
    signed URL per file and a TSV manifest block (`site-path <TAB> upload-url`).
+   For Pages advanced mode, include the single bundled root `_worker.js` and
+   optional `_routes.json`. If the worker uses Workers AI, configure its names
+   with `set_project_bindings` on the existing project before publishing.
 
 3. **Upload from disk.** Save the manifest to a file. Where the local file path
    differs from the site path, replace the left column with the local path.
